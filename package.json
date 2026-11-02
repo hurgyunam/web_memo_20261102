@@ -6,14 +6,17 @@
     "build": "nuxt build",
     "dev": "nuxt dev",
     "preview": "nuxt preview",
-    "postinstall": "nuxt prepare"
+    "postinstall": "nuxt prepare",
+    "verify:storage": "tsx scripts/verify-storage.ts"
   },
   "dependencies": {
+    "@libsql/client": "^0.18.0",
     "nuxt": "^3.21.11",
     "vue": "^3.5.22",
     "vue-router": "^4.5.1"
   },
   "devDependencies": {
+    "tsx": "^4.23.15",
     "typescript": "^5.9.3"
   },
   "engines": {
