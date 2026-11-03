@@ -10,6 +10,7 @@ const links = computed(() => {
       { to: '/memos', label: '메모' },
       { to: '/tags', label: '태그' },
       { to: '/filters', label: '필터' },
+      { to: '/password', label: '비밀번호' },
     ]
   }
   return [

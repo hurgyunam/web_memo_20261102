@@ -74,6 +74,15 @@ export const schemaStatements = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_account ON sessions(account_id)`,
   `CREATE INDEX IF NOT EXISTS idx_security_codes_account ON security_codes(account_id, purpose)`,
+  `CREATE TABLE IF NOT EXISTS password_change_grants (
+    token_hash TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    CHECK (length(token_hash) = 64 AND token_hash NOT GLOB '*[^0-9a-f]*'),
+    CHECK (length(expires_at) > 0)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_password_change_grants_account ON password_change_grants(account_id)`,
   `CREATE INDEX IF NOT EXISTS idx_memos_account_updated ON memos(account_id, updated_at)`,
   `CREATE INDEX IF NOT EXISTS idx_tags_account ON tags(account_id)`,
   `CREATE INDEX IF NOT EXISTS idx_memo_tags_tag ON memo_tags(tag_id)`,

@@ -26,8 +26,14 @@ function statusText(statusCode: number): string {
   if (statusCode === 401) {
     return 'Unauthorized'
   }
+  if (statusCode === 404) {
+    return 'Not Found'
+  }
   if (statusCode === 409) {
     return 'Conflict'
+  }
+  if (statusCode === 500) {
+    return 'Internal Server Error'
   }
   return 'Error'
 }

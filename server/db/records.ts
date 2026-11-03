@@ -155,6 +155,117 @@ export async function insertSecurityCode(
   return { id }
 }
 
+export async function listSecurityCodes(
+  db: Client,
+  input: { accountId: string, purpose: SecurityCodePurpose },
+): Promise<Array<{ id: string, code: string, expiresAt: string }>> {
+  await ensureSchema(db)
+  const result = await db.execute({
+    sql: `SELECT id, code, expires_at FROM security_codes
+          WHERE account_id = ? AND purpose = ?
+          ORDER BY created_at DESC`,
+    args: [input.accountId, input.purpose],
+  })
+  return result.rows.map((row) => ({
+    id: text(row.id),
+    code: text(row.code),
+    expiresAt: text(row.expires_at),
+  }))
+}
+
+export async function deleteSecurityCodes(
+  db: Client,
+  input: { accountId: string, purpose: SecurityCodePurpose },
+): Promise<void> {
+  await ensureSchema(db)
+  await db.execute({
+    sql: `DELETE FROM security_codes WHERE account_id = ? AND purpose = ?`,
+    args: [input.accountId, input.purpose],
+  })
+}
+
+export async function deleteSecurityCodeById(db: Client, id: string): Promise<boolean> {
+  await ensureSchema(db)
+  const result = await db.execute({
+    sql: `DELETE FROM security_codes WHERE id = ?`,
+    args: [id],
+  })
+  return Number(result.rowsAffected) > 0
+}
+
+export async function deleteExpiredSecurityCodes(
+  db: Client,
+  input: { accountId: string, purpose: SecurityCodePurpose, nowIso: string },
+): Promise<void> {
+  await ensureSchema(db)
+  await db.execute({
+    sql: `DELETE FROM security_codes WHERE account_id = ? AND purpose = ? AND expires_at <= ?`,
+    args: [input.accountId, input.purpose, input.nowIso],
+  })
+}
+
+export async function updateAccountPassword(db: Client, accountId: string, password: string): Promise<void> {
+  if (password.length === 0) {
+    throw new StorageError('비밀번호가 필요합니다.')
+  }
+  await ensureSchema(db)
+  const passwordHash = await hashPassword(password)
+  const result = await db.execute({
+    sql: `UPDATE accounts SET password_hash = ? WHERE id = ?`,
+    args: [passwordHash, accountId],
+  })
+  if (Number(result.rowsAffected) !== 1) {
+    throw new StorageError('계정을 찾지 못했습니다.')
+  }
+}
+
+export async function replacePasswordChangeGrant(
+  db: Client,
+  input: { tokenHash: string, accountId: string, expiresAt: string },
+): Promise<void> {
+  if (Number.isNaN(Date.parse(input.expiresAt))) {
+    throw new StorageError('비밀번호 변경 인증 만료 시각이 올바르지 않습니다.')
+  }
+  await ensureSchema(db)
+  await db.batch([
+    {
+      sql: `DELETE FROM password_change_grants WHERE account_id = ?`,
+      args: [input.accountId],
+    },
+    {
+      sql: `INSERT INTO password_change_grants (token_hash, account_id, expires_at, created_at) VALUES (?, ?, ?, ?)`,
+      args: [input.tokenHash, input.accountId, input.expiresAt, now()],
+    },
+  ], 'write')
+}
+
+export async function findPasswordChangeGrant(
+  db: Client,
+  tokenHash: string,
+): Promise<{ accountId: string, expiresAt: string } | null> {
+  await ensureSchema(db)
+  const result = await db.execute({
+    sql: `SELECT account_id, expires_at FROM password_change_grants WHERE token_hash = ?`,
+    args: [tokenHash],
+  })
+  const row = result.rows[0]
+  if (!row) {
+    return null
+  }
+  return {
+    accountId: text(row.account_id),
+    expiresAt: text(row.expires_at),
+  }
+}
+
+export async function deletePasswordChangeGrant(db: Client, tokenHash: string): Promise<void> {
+  await ensureSchema(db)
+  await db.execute({
+    sql: `DELETE FROM password_change_grants WHERE token_hash = ?`,
+    args: [tokenHash],
+  })
+}
+
 export async function insertMemo(
   db: Client,
   input: { accountId: string, body: string, version?: number },

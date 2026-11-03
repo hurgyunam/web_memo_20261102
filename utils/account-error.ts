@@ -25,5 +25,10 @@ function readMessage(error: unknown): string | undefined {
 }
 
 function isStatusText(message: string): boolean {
-  return message === 'Bad Request' || message === 'Unauthorized' || message === 'Conflict'
+  return message === 'Bad Request'
+    || message === 'Unauthorized'
+    || message === 'Not Found'
+    || message === 'Conflict'
+    || message === 'Internal Server Error'
+    || message === 'Error'
 }

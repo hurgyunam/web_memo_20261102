@@ -192,6 +192,11 @@ a {
   font: inherit;
 }
 
+.field input.code {
+  letter-spacing: 0.28em;
+  font-variant-numeric: tabular-nums;
+}
+
 .field input:focus-visible,
 .rail a:focus-visible,
 .rail button:focus-visible,

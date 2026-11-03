@@ -81,6 +81,21 @@ async function submit() {
       </button>
     </form>
     <p class="lead">
+      <NuxtLink
+        class="text-link"
+        to="/login/code"
+      >
+        보안코드로 로그인
+      </NuxtLink>
+      ·
+      <NuxtLink
+        class="text-link"
+        to="/password"
+      >
+        비밀번호 변경
+      </NuxtLink>
+    </p>
+    <p class="lead">
       계정이 없으면
       <NuxtLink
         class="text-link"
