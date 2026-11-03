@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "nuxt build",
-    "dev": "nuxt dev",
-    "preview": "nuxt preview",
+    "build": "node scripts/with-env.mjs build",
+    "dev": "node scripts/with-env.mjs dev",
+    "preview": "node scripts/with-env.mjs preview",
     "postinstall": "nuxt prepare",
     "verify:storage": "tsx scripts/verify-storage.ts"
   },

@@ -77,6 +77,19 @@ export async function findAccountByEmail(db: Client, email: string): Promise<Acc
   }
 }
 
+export async function findAccountEmailById(db: Client, id: string): Promise<string | null> {
+  await ensureSchema(db)
+  const result = await db.execute({
+    sql: `SELECT email FROM accounts WHERE id = ?`,
+    args: [id],
+  })
+  const row = result.rows[0]
+  if (!row) {
+    return null
+  }
+  return text(row.email)
+}
+
 export async function insertSession(
   db: Client,
   input: { tokenHash: string, accountId: string, expiresAt: string },

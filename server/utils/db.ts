@@ -22,7 +22,8 @@ export function useDb(): Client {
   if (!resolved.url) {
     throw createError({
       statusCode: 500,
-      statusMessage: '데이터베이스 접속 정보가 없습니다.',
+      statusMessage: 'Internal Server Error',
+      message: '데이터베이스 접속 정보가 없습니다.',
     })
   }
   client = createClient({
