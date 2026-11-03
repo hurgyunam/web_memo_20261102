@@ -7,6 +7,8 @@ const route = useRoute()
 const nuxtApp = useNuxtApp()
 const deleting = ref(false)
 const message = ref('')
+const baseline = ref<string | null>(null)
+const draft = ref('')
 
 const memoId = computed(() => {
   const value = route.params.id
@@ -23,6 +25,13 @@ const { data, error, pending } = await useFetch<MemoItem>(() => `/api/memos/${me
 })
 
 const memo = computed(() => data.value ?? null)
+const saveState = computed<'saved' | 'pending'>(() => {
+  if (baseline.value === null || draft.value === baseline.value) {
+    return 'saved'
+  }
+  return 'pending'
+})
+const saveLabel = computed(() => (saveState.value === 'saved' ? '저장됨' : '저장 대기'))
 const loadError = computed(() => {
   if (message.value) {
     return message.value
@@ -32,6 +41,20 @@ const loadError = computed(() => {
   }
   return ''
 })
+
+watch(memoId, () => {
+  baseline.value = null
+  draft.value = ''
+})
+
+function onBaseline(markdown: string) {
+  baseline.value = markdown
+  draft.value = markdown
+}
+
+function onDraft(markdown: string) {
+  draft.value = markdown
+}
 
 async function removeMemo() {
   if (!memo.value) {
@@ -54,7 +77,7 @@ async function removeMemo() {
     <div class="memo-toolbar">
       <div>
         <h1>편집</h1>
-        <p class="lead">이 계정의 마크다운 메모입니다.</p>
+        <p class="lead">위지윅으로 고칩니다. 저장될 값은 이 화면이 만든 마크다운입니다.</p>
       </div>
       <NuxtLink
         class="text-link"
@@ -79,25 +102,24 @@ async function removeMemo() {
     <template v-if="memo">
       <p
         class="status"
-        data-state="ok"
-        data-save-state="saved"
+        :data-state="saveState === 'saved' ? 'ok' : 'pending'"
+        :data-save-state="saveState"
         role="status"
       >
         <span class="status-label">저장 상태</span>
-        <span class="status-value">저장됨</span>
+        <span class="status-value">{{ saveLabel }}</span>
       </p>
-      <article class="memo-sheet">
-        <pre
-          v-if="memo.body"
-          class="memo-markdown"
-        >{{ memo.body }}</pre>
-        <p
-          v-else
-          class="lead"
-        >
-          빈 메모
-        </p>
-      </article>
+      <MemoWysiwyg
+        :key="memo.id"
+        :markdown="memo.body"
+        @baseline="onBaseline"
+        @draft="onDraft"
+      />
+      <pre
+        class="memo-draft"
+        data-memo-draft
+        aria-hidden="true"
+      >{{ draft }}</pre>
       <button
         class="danger"
         type="button"
