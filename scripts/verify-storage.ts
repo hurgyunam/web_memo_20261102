@@ -9,7 +9,9 @@ import { hashPassword, verifyPassword } from '../server/db/passwords'
 import {
   findAccountByEmail,
   findSessionAccountId,
+  deleteMemoForAccount,
   getMemo,
+  getMemoForAccount,
   getSavedFilter,
   insertAccount,
   insertMemo,
@@ -18,6 +20,7 @@ import {
   insertSession,
   insertTag,
   linkMemoTag,
+  listMemosForAccount,
   StorageError,
 } from '../server/db/records'
 import { ensureSchema } from '../server/db/schema'
@@ -280,6 +283,42 @@ async function verifyDatabase(): Promise<void> {
       keyword: '',
     })
     assert((await getSavedFilter(db, emptyKeyword.id))?.keyword === '', '빈 키워드를 저장하지 못했습니다.')
+
+    const early = await insertMemo(db, { accountId: account.id, body: '먼저 수정' })
+    const late = await insertMemo(db, { accountId: account.id, body: '나중에 수정' })
+    await db.execute({
+      sql: `UPDATE memos SET updated_at = ? WHERE id = ?`,
+      args: ['2020-01-01T00:00:00.000Z', early.id],
+    })
+    await db.execute({
+      sql: `UPDATE memos SET updated_at = ? WHERE id = ?`,
+      args: ['2024-06-01T00:00:00.000Z', late.id],
+    })
+    const foreign = await insertMemo(db, { accountId: other.id, body: '다른 계정 메모' })
+    const ownMemos = await listMemosForAccount(db, account.id)
+    const ownIds = ownMemos.map((item) => item.id)
+    assert(ownMemos.every((item) => item.accountId === account.id), '목록에 다른 계정의 메모가 있습니다.')
+    assert(!ownIds.includes(foreign.id), '다른 계정의 메모가 목록에 있습니다.')
+    assert(ownIds.includes(versioned.id) && ownMemos.some((item) => item.id === versioned.id && item.body === ''), '빈 메모가 목록에 없습니다.')
+    assert(ownIds.indexOf(late.id) >= 0 && ownIds.indexOf(late.id) < ownIds.indexOf(early.id), '최근 수정 순이 아닙니다.')
+    assert(await getMemoForAccount(db, account.id, foreign.id) === null, '다른 계정의 메모가 조회됩니다.')
+    assert(await deleteMemoForAccount(db, { accountId: account.id, id: foreign.id }) === false, '다른 계정의 메모가 삭제되었습니다.')
+    assert((await getMemo(db, foreign.id))?.body === '다른 계정 메모', '다른 계정 메모 본문이 사라졌습니다.')
+
+    const doomed = await insertMemo(db, { accountId: account.id, body: '삭제 대상' })
+    await linkMemoTag(db, { memoId: doomed.id, tagId: personal.id })
+    const tagCount = await count(db, 'SELECT count(*) AS n FROM tags')
+    const filterCount = await count(db, 'SELECT count(*) AS n FROM saved_filters')
+    const otherLinks = await count(db, 'SELECT count(*) AS n FROM memo_tags WHERE memo_id = ?', [memo.id])
+    assert(await deleteMemoForAccount(db, { accountId: account.id, id: doomed.id }), '메모를 삭제하지 못했습니다.')
+    assert(await getMemo(db, doomed.id) === null, '삭제한 메모 본문이 조회됩니다.')
+    assert(await getMemoForAccount(db, account.id, doomed.id) === null, '삭제한 메모가 계정 조회에 남습니다.')
+    assert(!(await listMemosForAccount(db, account.id)).some((item) => item.id === doomed.id), '삭제한 메모가 목록에 남습니다.')
+    assert(await count(db, 'SELECT count(*) AS n FROM memo_tags WHERE memo_id = ?', [doomed.id]) === 0, '삭제한 메모의 태그 연결이 남았습니다.')
+    assert(await count(db, 'SELECT count(*) AS n FROM tags WHERE id = ?', [personal.id]) === 1, '메모 삭제 때 태그 행이 지워졌습니다.')
+    assert(await count(db, 'SELECT count(*) AS n FROM tags') === tagCount, '메모 삭제가 다른 태그 행을 바꿨습니다.')
+    assert(await count(db, 'SELECT count(*) AS n FROM memo_tags WHERE memo_id = ?', [memo.id]) === otherLinks, '다른 메모의 태그 연결이 지워졌습니다.')
+    assert(await count(db, 'SELECT count(*) AS n FROM saved_filters') === filterCount, '메모 삭제가 필터를 바꿨습니다.')
     await rejectsWith(
       () => insertSavedFilter(db, {
         accountId: account.id,

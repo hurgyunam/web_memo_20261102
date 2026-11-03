@@ -23,6 +23,7 @@ export type MemoRecord = {
   accountId: string
   body: string
   version: number
+  updatedAt: string
 }
 
 export type SavedFilterRecord = {
@@ -288,19 +289,60 @@ export async function insertMemo(
 export async function getMemo(db: Client, id: string): Promise<MemoRecord | null> {
   await ensureSchema(db)
   const result = await db.execute({
-    sql: `SELECT id, account_id, body, version FROM memos WHERE id = ?`,
+    sql: `SELECT id, account_id, body, version, updated_at FROM memos WHERE id = ?`,
     args: [id],
   })
   const row = result.rows[0]
-  if (!row) {
-    return null
+  return row ? mapMemo(row) : null
+}
+
+export async function listMemosForAccount(db: Client, accountId: string): Promise<MemoRecord[]> {
+  await ensureSchema(db)
+  const result = await db.execute({
+    sql: `SELECT id, account_id, body, version, updated_at
+          FROM memos
+          WHERE account_id = ?
+          ORDER BY updated_at DESC, id DESC`,
+    args: [accountId],
+  })
+  return result.rows.map((row) => mapMemo(row))
+}
+
+export async function getMemoForAccount(db: Client, accountId: string, id: string): Promise<MemoRecord | null> {
+  await ensureSchema(db)
+  const result = await db.execute({
+    sql: `SELECT id, account_id, body, version, updated_at
+          FROM memos
+          WHERE id = ? AND account_id = ?`,
+    args: [id, accountId],
+  })
+  const row = result.rows[0]
+  return row ? mapMemo(row) : null
+}
+
+export async function deleteMemoForAccount(
+  db: Client,
+  input: { accountId: string, id: string },
+): Promise<boolean> {
+  await ensureSchema(db)
+  const existing = await db.execute({
+    sql: `SELECT id FROM memos WHERE id = ? AND account_id = ?`,
+    args: [input.id, input.accountId],
+  })
+  if (!existing.rows[0]) {
+    return false
   }
-  return {
-    id: text(row.id),
-    accountId: text(row.account_id),
-    body: text(row.body),
-    version: integer(row.version),
-  }
+  await db.batch([
+    {
+      sql: `DELETE FROM memo_tags WHERE memo_id = ?`,
+      args: [input.id],
+    },
+    {
+      sql: `DELETE FROM memos WHERE id = ? AND account_id = ?`,
+      args: [input.id, input.accountId],
+    },
+  ], 'write')
+  return true
 }
 
 export async function insertTag(
@@ -483,6 +525,16 @@ function constraintDetail(error: unknown): string {
     return error.message
   }
   return ''
+}
+
+function mapMemo(row: Record<string, unknown>): MemoRecord {
+  return {
+    id: text(row.id),
+    accountId: text(row.account_id),
+    body: text(row.body),
+    version: integer(row.version),
+    updatedAt: text(row.updated_at),
+  }
 }
 
 function text(value: unknown): string {

@@ -201,6 +201,8 @@ a {
 .rail a:focus-visible,
 .rail button:focus-visible,
 .submit:focus-visible,
+.danger:focus-visible,
+.memo-link:focus-visible,
 .text-link:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -243,6 +245,96 @@ a {
 .text-link {
   color: var(--accent);
   font-weight: 700;
+}
+
+.memo-panel {
+  max-width: 40rem;
+}
+
+.memo-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.memo-toolbar .submit,
+.danger {
+  width: auto;
+  padding: 0 16px;
+}
+
+.danger {
+  justify-self: start;
+  min-height: 44px;
+  border: 1px solid var(--danger);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--danger);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.danger:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.memo-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.memo-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.memo-link {
+  display: grid;
+  flex: 1;
+  gap: 4px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+  text-decoration: none;
+}
+
+.memo-preview {
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memo-time {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.memo-sheet {
+  margin: 0;
+  min-height: 12rem;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+}
+
+.memo-markdown {
+  margin: 0;
+  font-family: inherit;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 @media (min-width: 960px) {
