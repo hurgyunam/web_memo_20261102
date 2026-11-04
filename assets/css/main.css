@@ -216,7 +216,21 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
+.field select {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+}
+
 .field input:focus-visible,
+.memo-tag-remove:focus-visible,
+.tag-suggest-list button:focus-visible,
+.field select:focus-visible,
 .rail a:focus-visible,
 .rail button:focus-visible,
 .submit:focus-visible,
@@ -561,6 +575,122 @@ a {
 .memo-time {
   color: var(--muted);
   font-size: 0.8125rem;
+}
+
+.memo-tag-box {
+  display: grid;
+  gap: 12px;
+}
+
+.memo-tag-box h2 {
+  margin: 0;
+  font-size: 1.125rem;
+}
+
+.tag-link-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+}
+
+.tag-suggest {
+  position: relative;
+  flex: 1 1 12rem;
+}
+
+.tag-suggest-list {
+  position: absolute;
+  z-index: 3;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  display: grid;
+  max-height: 12rem;
+  margin: 0;
+  padding: 4px;
+  overflow: auto;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.tag-suggest-list button {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tag-suggest-list button[data-active="true"],
+.tag-suggest-list button:hover {
+  background: var(--paper);
+}
+
+.tag-link-form .submit {
+  width: auto;
+  padding: 0 16px;
+}
+
+.memo-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.memo-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 40px;
+  padding: 4px 4px 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+}
+
+.memo-tag-name {
+  min-width: 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.memo-tag-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.125rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.memo-tag-remove:hover,
+.memo-tag-remove:focus-visible {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.memo-tag-remove:disabled {
+  cursor: wait;
+  opacity: 0.7;
 }
 
 .memo-editor {

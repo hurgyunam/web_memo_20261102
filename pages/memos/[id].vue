@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { MemoItem, MemoSaveRequest } from '~/types/memo'
+import type { TagItem } from '~/types/tag'
 import {
   AUTO_SAVE_INTERVAL_MS,
   acceptServerMemo,
@@ -25,6 +26,13 @@ const deleting = ref(false)
 const resolving = ref(false)
 const causingConflict = ref(false)
 const message = ref('')
+const tagQuery = ref('')
+const tagMenuOpen = ref(false)
+const suggestionIndex = ref(-1)
+const addingTag = ref(false)
+const linkingId = ref('')
+const unlinkingId = ref('')
+const tagMessage = ref('')
 const view = ref<SaveView | null>(null)
 const wysiwyg = ref<{ replaceMarkdown: (markdown: string) => string } | null>(null)
 let alive = true
@@ -45,7 +53,66 @@ const { data, error, pending } = await useFetch<MemoItem>(() => `/api/memos/${me
   },
 })
 
+const {
+  data: tagCatalog,
+  error: tagCatalogError,
+  pending: catalogPending,
+  refresh: refreshCatalog,
+} = await useFetch<{ tags: TagItem[] }>('/api/tags', {
+  getCachedData(key) {
+    if (nuxtApp.isHydrating) {
+      return nuxtApp.payload.data[key]
+    }
+  },
+})
+
+const {
+  data: linkedData,
+  error: linkedError,
+  pending: linkedPending,
+  refresh: refreshLinked,
+} = await useFetch<{ tags: TagItem[] }>(() => `/api/memos/${memoId.value}/tags`, {
+  watch: [memoId],
+  getCachedData(key) {
+    if (nuxtApp.isHydrating) {
+      return nuxtApp.payload.data[key]
+    }
+  },
+})
+
 const memo = computed(() => data.value ?? null)
+const accountTags = computed(() => tagCatalog.value?.tags ?? [])
+const linkedTags = computed(() => linkedData.value?.tags ?? [])
+const linkedTagIds = computed(() => new Set(linkedTags.value.map((tag) => tag.id)))
+const tagSuggestions = computed(() => {
+  const query = tagQuery.value.trim().toLowerCase()
+  return accountTags.value.filter((tag) => {
+    if (linkedTagIds.value.has(tag.id)) {
+      return false
+    }
+    if (!query) {
+      return true
+    }
+    return tag.name.toLowerCase().includes(query)
+  })
+})
+const showTagSuggestions = computed(() => tagMenuOpen.value && tagSuggestions.value.length > 0)
+const activeSuggestionId = computed(() => {
+  const tag = tagSuggestions.value[suggestionIndex.value]
+  return tag ? `memo-tag-option-${tag.id}` : undefined
+})
+const tagLoadError = computed(() => {
+  if (tagMessage.value) {
+    return tagMessage.value
+  }
+  if (tagCatalogError.value) {
+    return accountErrorMessage(tagCatalogError.value, '태그 목록을 불러오지 못했습니다.')
+  }
+  if (linkedError.value) {
+    return accountErrorMessage(linkedError.value, '연결된 태그를 불러오지 못했습니다.')
+  }
+  return ''
+})
 const savePhase = computed(() => view.value?.phase ?? 'saved')
 const saveLabel = computed(() => savePhaseLabel(savePhase.value))
 const saveDataState = computed(() => (savePhase.value === 'saved' ? 'ok' : savePhase.value))
@@ -64,9 +131,18 @@ const loadError = computed(() => {
 watch(memoId, () => {
   view.value = null
   requestSerial += 1
+  tagQuery.value = ''
+  tagMenuOpen.value = false
+  suggestionIndex.value = -1
+  tagMessage.value = ''
+})
+
+watch(tagQuery, () => {
+  suggestionIndex.value = -1
 })
 
 onMounted(() => {
+  document.addEventListener('visibilitychange', refreshTagsWhenVisible)
   autoSaveTimer = setInterval(() => {
     if (!view.value || !shouldAutoSave(view.value)) {
       return
@@ -78,10 +154,19 @@ onMounted(() => {
 onBeforeUnmount(() => {
   alive = false
   requestSerial += 1
+  document.removeEventListener('visibilitychange', refreshTagsWhenVisible)
   if (autoSaveTimer) {
     clearInterval(autoSaveTimer)
   }
 })
+
+function refreshTagsWhenVisible() {
+  if (document.visibilityState !== 'visible') {
+    return
+  }
+  void refreshCatalog()
+  void refreshLinked()
+}
 
 function onBaseline(markdown: string) {
   const current = memo.value
@@ -229,6 +314,131 @@ async function causeConflict() {
     if (token === requestSerial) {
       causingConflict.value = false
     }
+  }
+}
+
+function findExistingTag(name: string): TagItem | undefined {
+  const trimmed = name.trim()
+  const folded = trimmed.toLowerCase()
+  return accountTags.value.find((tag) => tag.name === trimmed)
+    ?? accountTags.value.find((tag) => tag.name.toLowerCase() === folded)
+}
+
+function onTagKeydown(event: KeyboardEvent) {
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault()
+    tagMenuOpen.value = true
+    const count = tagSuggestions.value.length
+    if (count === 0) {
+      return
+    }
+    if (event.key === 'ArrowDown') {
+      suggestionIndex.value = suggestionIndex.value + 1 >= count ? 0 : suggestionIndex.value + 1
+      return
+    }
+    suggestionIndex.value = suggestionIndex.value <= 0 ? count - 1 : suggestionIndex.value - 1
+    return
+  }
+  if (event.key === 'Escape') {
+    tagMenuOpen.value = false
+    suggestionIndex.value = -1
+  }
+}
+
+function closeTagMenu() {
+  tagMenuOpen.value = false
+  suggestionIndex.value = -1
+}
+
+async function chooseSuggestion(tag: TagItem) {
+  const current = memo.value
+  if (!current || addingTag.value || linkingId.value || unlinkingId.value) {
+    return
+  }
+  linkingId.value = tag.id
+  tagMessage.value = ''
+  try {
+    await $fetch<TagItem>(`/api/memos/${current.id}/tags`, {
+      method: 'POST',
+      body: { tagId: tag.id },
+    })
+    tagQuery.value = ''
+    closeTagMenu()
+    await refreshLinked()
+  } catch (caught) {
+    tagMessage.value = accountErrorMessage(caught, '태그를 연결하지 못했습니다.')
+  } finally {
+    linkingId.value = ''
+  }
+}
+
+async function submitTagQuery() {
+  if (!memo.value || addingTag.value || linkingId.value) {
+    return
+  }
+  const picked = tagSuggestions.value[suggestionIndex.value]
+  if (picked) {
+    await chooseSuggestion(picked)
+    return
+  }
+  const trimmed = tagQuery.value.trim()
+  if (!trimmed) {
+    tagMessage.value = '입력 오류: 태그 이름을 입력해 주세요.'
+    return
+  }
+  const existing = findExistingTag(trimmed)
+  if (existing) {
+    await chooseSuggestion(existing)
+    return
+  }
+  addingTag.value = true
+  tagMessage.value = ''
+  try {
+    const created = await createOrFindTag(trimmed)
+    await $fetch<TagItem>(`/api/memos/${memo.value.id}/tags`, {
+      method: 'POST',
+      body: { tagId: created.id },
+    })
+    tagQuery.value = ''
+    closeTagMenu()
+    await Promise.all([refreshCatalog(), refreshLinked()])
+  } catch (caught) {
+    tagMessage.value = accountErrorMessage(caught, '태그를 추가하지 못했습니다.')
+  } finally {
+    addingTag.value = false
+  }
+}
+
+async function createOrFindTag(name: string): Promise<TagItem> {
+  try {
+    return await $fetch<TagItem>('/api/tags', {
+      method: 'POST',
+      body: { name },
+    })
+  } catch (caught) {
+    await refreshCatalog()
+    const existing = findExistingTag(name)
+    if (existing) {
+      return existing
+    }
+    throw caught
+  }
+}
+
+async function unlinkTag(tag: TagItem) {
+  const current = memo.value
+  if (!current || linkingId.value || unlinkingId.value) {
+    return
+  }
+  unlinkingId.value = tag.id
+  tagMessage.value = ''
+  try {
+    await $fetch(`/api/memos/${current.id}/tags/${tag.id}`, { method: 'DELETE' })
+    await refreshLinked()
+  } catch (caught) {
+    tagMessage.value = accountErrorMessage(caught, '태그 연결을 제거하지 못했습니다.')
+  } finally {
+    unlinkingId.value = ''
   }
 }
 
@@ -385,6 +595,111 @@ async function removeMemo() {
         data-memo-draft
         aria-hidden="true"
       >{{ draft }}</pre>
+      <section
+        class="memo-tag-box"
+        aria-label="태그"
+      >
+        <h2 id="memo-tag-heading">태그</h2>
+        <p
+          v-if="tagLoadError"
+          class="alert"
+          role="alert"
+        >
+          {{ tagLoadError }}
+        </p>
+        <form
+          class="tag-link-form"
+          novalidate
+          @submit.prevent="submitTagQuery"
+        >
+          <div class="tag-suggest">
+            <div class="field">
+              <input
+                v-model="tagQuery"
+                type="text"
+                name="tag"
+                role="combobox"
+                autocomplete="off"
+                spellcheck="false"
+                aria-autocomplete="list"
+                aria-controls="memo-tag-suggestions"
+                aria-labelledby="memo-tag-heading"
+                :aria-expanded="showTagSuggestions ? 'true' : 'false'"
+                :aria-activedescendant="activeSuggestionId"
+                @focus="tagMenuOpen = true"
+                @input="tagMenuOpen = true"
+                @keydown="onTagKeydown"
+                @blur="closeTagMenu"
+              >
+            </div>
+            <ul
+              v-if="showTagSuggestions"
+              id="memo-tag-suggestions"
+              class="tag-suggest-list"
+              role="listbox"
+            >
+              <li
+                v-for="(tag, index) in tagSuggestions"
+                :key="tag.id"
+              >
+                <button
+                  :id="`memo-tag-option-${tag.id}`"
+                  type="button"
+                  role="option"
+                  :aria-selected="index === suggestionIndex"
+                  :data-active="index === suggestionIndex ? 'true' : 'false'"
+                  @mouseenter="suggestionIndex = index"
+                  @mousedown.prevent="chooseSuggestion(tag)"
+                >
+                  {{ tag.name }}
+                </button>
+              </li>
+            </ul>
+          </div>
+          <button
+            class="submit"
+            type="submit"
+            :disabled="addingTag || linkingId.length > 0"
+          >
+            {{ addingTag || linkingId ? '추가 중' : '추가' }}
+          </button>
+        </form>
+        <p
+          v-if="(catalogPending || linkedPending) && linkedTags.length === 0 && !tagLoadError"
+          class="lead"
+        >
+          태그를 불러오는 중
+        </p>
+        <p
+          v-else-if="linkedTags.length === 0 && !linkedError"
+          class="lead"
+        >
+          연결된 태그가 없습니다.
+        </p>
+        <ul
+          v-else-if="linkedTags.length > 0"
+          class="memo-tags"
+        >
+          <li
+            v-for="tag in linkedTags"
+            :key="tag.id"
+            class="memo-tag"
+            :data-memo-tag="tag.id"
+            :data-tag-name="tag.name"
+          >
+            <span class="memo-tag-name">{{ tag.name }}</span>
+            <button
+              class="memo-tag-remove"
+              type="button"
+              :aria-label="`${tag.name} 삭제`"
+              :disabled="unlinkingId === tag.id"
+              @click="unlinkTag(tag)"
+            >
+              <span aria-hidden="true">×</span>
+            </button>
+          </li>
+        </ul>
+      </section>
       <button
         class="danger"
         type="button"

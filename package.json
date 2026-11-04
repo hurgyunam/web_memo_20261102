@@ -10,7 +10,8 @@
     "verify:storage": "tsx scripts/verify-storage.ts",
     "verify:security-code": "tsx scripts/verify-security-code.ts",
     "verify:memo-save": "tsx scripts/verify-memo-save.ts",
-    "verify:tags": "tsx scripts/verify-tags.ts"
+    "verify:tags": "tsx scripts/verify-tags.ts",
+    "verify:memo-tags": "tsx scripts/verify-memo-tags.ts"
   },
   "dependencies": {
     "@floating-ui/dom": "^1.8.0",

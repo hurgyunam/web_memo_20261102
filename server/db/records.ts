@@ -521,6 +521,79 @@ export async function linkMemoTag(
   )
 }
 
+export type MemoTagLinkOutcome =
+  | { kind: 'linked', tag: TagRecord }
+  | { kind: 'missing-memo' }
+  | { kind: 'missing-tag' }
+
+export async function linkMemoTagForAccount(
+  db: Client,
+  input: { accountId: string, memoId: string, tagId: string },
+): Promise<MemoTagLinkOutcome> {
+  await ensureSchema(db)
+  const memo = await getMemoForAccount(db, input.accountId, input.memoId)
+  if (!memo) {
+    return { kind: 'missing-memo' }
+  }
+  const tag = await getTagForAccount(db, input.accountId, input.tagId)
+  if (!tag) {
+    return { kind: 'missing-tag' }
+  }
+  const existing = await db.execute({
+    sql: `SELECT 1 AS ok FROM memo_tags WHERE memo_id = ? AND tag_id = ?`,
+    args: [input.memoId, input.tagId],
+  })
+  if (!existing.rows[0]) {
+    try {
+      await linkMemoTag(db, { memoId: input.memoId, tagId: input.tagId })
+    } catch (error) {
+      if (!(error instanceof StorageError) || error.message !== '이미 연결된 태그입니다.') {
+        throw error
+      }
+    }
+  }
+  const current = await getTagForAccount(db, input.accountId, input.tagId)
+  return { kind: 'linked', tag: current ?? tag }
+}
+
+export async function listTagsForMemo(
+  db: Client,
+  input: { accountId: string, memoId: string },
+): Promise<TagRecord[] | null> {
+  await ensureSchema(db)
+  const memo = await getMemoForAccount(db, input.accountId, input.memoId)
+  if (!memo) {
+    return null
+  }
+  const result = await db.execute({
+    sql: `SELECT tags.id, tags.account_id, tags.name
+          FROM memo_tags
+          JOIN tags ON tags.id = memo_tags.tag_id AND tags.account_id = ?
+          WHERE memo_tags.memo_id = ?
+          ORDER BY tags.name, tags.id`,
+    args: [input.accountId, input.memoId],
+  })
+  return result.rows.map((row) => mapTag(row))
+}
+
+export type MemoTagUnlinkOutcome = 'removed' | 'missing-memo' | 'missing-link'
+
+export async function unlinkMemoTagForAccount(
+  db: Client,
+  input: { accountId: string, memoId: string, tagId: string },
+): Promise<MemoTagUnlinkOutcome> {
+  await ensureSchema(db)
+  const memo = await getMemoForAccount(db, input.accountId, input.memoId)
+  if (!memo) {
+    return 'missing-memo'
+  }
+  const result = await db.execute({
+    sql: `DELETE FROM memo_tags WHERE memo_id = ? AND tag_id = ?`,
+    args: [input.memoId, input.tagId],
+  })
+  return Number(result.rowsAffected) === 1 ? 'removed' : 'missing-link'
+}
+
 export async function insertSavedFilter(
   db: Client,
   input: {
