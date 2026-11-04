@@ -14,6 +14,7 @@
   --danger-bg: #fdecec;
   --saving: #2457a6;
   --conflict: #6d3b8f;
+  --conflict-bg: #f3eaf8;
 }
 
 *,
@@ -220,6 +221,8 @@ a {
 .rail button:focus-visible,
 .submit:focus-visible,
 .save-button:focus-visible,
+.dev-conflict:focus-visible,
+.conflict-actions button:focus-visible,
 .danger:focus-visible,
 .memo-link:focus-visible,
 .memo-tool:focus-visible,
@@ -375,6 +378,71 @@ a {
   clip: rect(0, 0, 0, 0);
   border: 0;
   white-space: nowrap;
+}
+
+.conflict-choice {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--conflict);
+  border-radius: 16px;
+  background: var(--conflict-bg);
+}
+
+.conflict-choice p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.conflict-actions button {
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 12px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.conflict-actions button[data-conflict-choice="server"] {
+  border: 1px solid var(--conflict);
+  background: var(--card);
+  color: var(--conflict);
+}
+
+.conflict-actions button[data-conflict-choice="draft"] {
+  border: 0;
+  background: var(--conflict);
+  color: #fff;
+}
+
+.conflict-actions button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.dev-conflict {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px dashed var(--conflict);
+  border-radius: 12px;
+  background: var(--conflict-bg);
+  color: var(--conflict);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.dev-conflict:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
 }
 
 .danger {

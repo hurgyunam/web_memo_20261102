@@ -74,6 +74,19 @@ export function applySaveFailure(view: SaveView): SaveView {
   return { ...view, phase: 'failed' }
 }
 
+export function acceptServerMemo(body: string, version: number): SaveView {
+  return {
+    phase: 'saved',
+    baseline: body,
+    baselineVersion: version,
+    draft: body,
+  }
+}
+
+export function applyOverwriteFailure(view: SaveView): SaveView {
+  return { ...view, phase: 'conflict' }
+}
+
 export function shouldAutoSave(view: SaveView): boolean {
   return beginSave(view) !== null
 }

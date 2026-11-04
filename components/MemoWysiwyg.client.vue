@@ -87,6 +87,20 @@ onMounted(() => {
   emit('baseline', instance.getMarkdown())
 })
 
+function replaceMarkdown(markdown: string): string {
+  const instance = editor.value
+  if (!instance) {
+    throw new Error('편집기가 없습니다.')
+  }
+  instance.commands.setContent(markdown, {
+    contentType: 'markdown',
+    emitUpdate: false,
+  })
+  return instance.getMarkdown()
+}
+
+defineExpose({ replaceMarkdown })
+
 onBeforeUnmount(() => {
   editor.value?.destroy()
 })

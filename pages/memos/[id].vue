@@ -2,7 +2,9 @@
 import type { MemoItem, MemoSaveRequest } from '~/types/memo'
 import {
   AUTO_SAVE_INTERVAL_MS,
+  acceptServerMemo,
   applyDraft,
+  applyOverwriteFailure,
   applySaveConflict,
   applySaveFailure,
   applySaveSuccess,
@@ -18,9 +20,13 @@ useHead({ title: '편집 · 메모' })
 
 const route = useRoute()
 const nuxtApp = useNuxtApp()
+const isLocalDev = import.meta.dev
 const deleting = ref(false)
+const resolving = ref(false)
+const causingConflict = ref(false)
 const message = ref('')
 const view = ref<SaveView | null>(null)
+const wysiwyg = ref<{ replaceMarkdown: (markdown: string) => string } | null>(null)
 let alive = true
 let requestSerial = 0
 let autoSaveTimer: ReturnType<typeof setInterval> | undefined
@@ -121,6 +127,111 @@ async function saveDraft() {
   }
 }
 
+async function keepServerMemo() {
+  const current = memo.value
+  if (!current || view.value?.phase !== 'conflict' || resolving.value) {
+    return
+  }
+  const token = ++requestSerial
+  resolving.value = true
+  message.value = ''
+  try {
+    const latest = await $fetch<MemoItem>(`/api/memos/${current.id}`)
+    if (!alive || token !== requestSerial || view.value?.phase !== 'conflict') {
+      return
+    }
+    const markdown = wysiwyg.value?.replaceMarkdown(latest.body)
+    if (typeof markdown !== 'string') {
+      throw new Error('편집기가 없습니다.')
+    }
+    view.value = acceptServerMemo(markdown, latest.version)
+  } catch (caught) {
+    if (!alive || token !== requestSerial || !view.value) {
+      return
+    }
+    view.value = applyOverwriteFailure(view.value)
+    message.value = accountErrorMessage(caught, '마지막 저장본을 불러오지 못했습니다.')
+  } finally {
+    if (token === requestSerial) {
+      resolving.value = false
+    }
+  }
+}
+
+async function keepCurrentDraft() {
+  const current = memo.value
+  const started = view.value
+  if (!current || !started || started.phase !== 'conflict' || resolving.value) {
+    return
+  }
+  const snapshot = started.draft
+  const token = ++requestSerial
+  resolving.value = true
+  message.value = ''
+  try {
+    const latest = await $fetch<MemoItem>(`/api/memos/${current.id}`)
+    const saved = await $fetch<MemoItem>(`/api/memos/${current.id}`, {
+      method: 'PUT',
+      body: {
+        body: snapshot,
+        baseVersion: latest.version,
+      } satisfies MemoSaveRequest,
+    })
+    if (!alive || token !== requestSerial || !view.value) {
+      return
+    }
+    view.value = applySaveSuccess(view.value, snapshot, saved.version)
+  } catch (caught) {
+    if (!alive || token !== requestSerial || !view.value) {
+      return
+    }
+    view.value = applyOverwriteFailure(view.value)
+    message.value = accountErrorMessage(caught, '현재 편집본을 저장하지 못했습니다.')
+  } finally {
+    if (token === requestSerial) {
+      resolving.value = false
+    }
+  }
+}
+
+async function causeConflict() {
+  if (!isLocalDev) {
+    return
+  }
+  const current = memo.value
+  const started = view.value
+  if (!current || !started || causingConflict.value || resolving.value || started.phase === 'saving') {
+    return
+  }
+  const token = ++requestSerial
+  causingConflict.value = true
+  message.value = ''
+  const stamp = new Date().toLocaleString('ko-KR', { hour12: false })
+  try {
+    const latest = await $fetch<MemoItem>(`/api/memos/${current.id}`)
+    await $fetch<MemoItem>(`/api/memos/${current.id}`, {
+      method: 'PUT',
+      body: {
+        body: `${started.baseline}\n\n다른 화면에서 ${stamp}에 저장한 본문`,
+        baseVersion: latest.version,
+      } satisfies MemoSaveRequest,
+    })
+    if (!alive || token !== requestSerial || !view.value) {
+      return
+    }
+    view.value = applySaveConflict(view.value)
+  } catch (caught) {
+    if (!alive || token !== requestSerial || !view.value) {
+      return
+    }
+    message.value = accountErrorMessage(caught, '충돌을 만들지 못했습니다.')
+  } finally {
+    if (token === requestSerial) {
+      causingConflict.value = false
+    }
+  }
+}
+
 async function removeMemo() {
   if (!memo.value) {
     return
@@ -204,6 +315,15 @@ async function removeMemo() {
             role="status"
           >저장 상태 {{ saveLabel }}</span>
         </span>
+        <button
+          v-if="isLocalDev && memo"
+          class="dev-conflict"
+          type="button"
+          :disabled="causingConflict || resolving || savePhase === 'saving' || !view"
+          @click="causeConflict"
+        >
+          {{ causingConflict ? '충돌 만드는 중' : '충돌 일으키기' }}
+        </button>
         <NuxtLink
           class="text-link"
           to="/memos"
@@ -226,7 +346,35 @@ async function removeMemo() {
       {{ loadError }}
     </p>
     <template v-if="memo">
+      <div
+        v-if="savePhase === 'conflict'"
+        class="conflict-choice"
+        role="group"
+        aria-label="충돌 해결"
+        :data-resolving="resolving ? 'true' : 'false'"
+      >
+        <p>마지막 저장본과 현재 편집본이 다릅니다. 어느 쪽을 살릴지 고르세요. 고르기 전에는 저장하지 않습니다.</p>
+        <div class="conflict-actions">
+          <button
+            type="button"
+            data-conflict-choice="server"
+            :disabled="resolving"
+            @click="keepServerMemo"
+          >
+            마지막 저장본 살리기
+          </button>
+          <button
+            type="button"
+            data-conflict-choice="draft"
+            :disabled="resolving"
+            @click="keepCurrentDraft"
+          >
+            현재 편집본 살리기
+          </button>
+        </div>
+      </div>
       <MemoWysiwyg
+        ref="wysiwyg"
         :key="memo.id"
         :markdown="memo.body"
         @baseline="onBaseline"

@@ -2,7 +2,9 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   AUTO_SAVE_INTERVAL_MS,
+  acceptServerMemo,
   applyDraft,
+  applyOverwriteFailure,
   applySaveConflict,
   applySaveFailure,
   applySaveSuccess,
@@ -55,6 +57,16 @@ function main(): void {
   const conflicted = applySaveConflict(applyDraft(started.view, '화면 유지'))
   assert(conflicted.phase === 'conflict' && conflicted.draft === '화면 유지' && conflicted.baseline === '처음', '충돌 때 화면 본문이나 기준이 바뀝니다.')
   assert(beginSave(conflicted) === null && !shouldAutoSave(conflicted), '충돌 상태에서 서버로 저장을 보냅니다.')
+  const typedDuringConflict = applyDraft(conflicted, '편집 유지')
+  assert(typedDuringConflict.phase === 'conflict' && typedDuringConflict.draft === '편집 유지', '충돌 중에 현재 편집본이 바뀌지 않습니다.')
+  assert(beginSave(typedDuringConflict) === null && !shouldAutoSave(typedDuringConflict), '충돌을 고르기 전에 저장을 보냅니다.')
+
+  const accepted = acceptServerMemo('서버 본문', 4)
+  assert(accepted.phase === 'saved' && accepted.draft === '서버 본문' && accepted.baseline === '서버 본문' && accepted.baselineVersion === 4, '마지막 저장본이 새 기준이 되지 않습니다.')
+  const overwritten = applySaveSuccess(typedDuringConflict, typedDuringConflict.draft, 5)
+  assert(overwritten.phase === 'saved' && overwritten.baseline === '편집 유지' && overwritten.baselineVersion === 5 && overwritten.draft === '편집 유지', '현재 편집본이 새 기준이 되지 않습니다.')
+  const overwriteFailed = applyOverwriteFailure(typedDuringConflict)
+  assert(overwriteFailed.phase === 'conflict' && overwriteFailed.draft === '편집 유지' && overwriteFailed.baseline === '처음' && overwriteFailed.baselineVersion === 1, '덮어쓰기 실패 때 편집본이나 충돌 상태가 유지되지 않습니다.')
 
   const failed = applySaveFailure(applyDraft(started.view, '실패 후에도 유지'))
   assert(failed.phase === 'failed' && failed.draft === '실패 후에도 유지' && failed.baseline === '처음', '실패 때 화면 본문이 유지되지 않습니다.')
