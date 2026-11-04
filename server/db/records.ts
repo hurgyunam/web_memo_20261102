@@ -26,6 +26,16 @@ export type MemoRecord = {
   updatedAt: string
 }
 
+export type TagRecord = {
+  id: string
+  accountId: string
+  name: string
+}
+
+export type TagRenameOutcome =
+  | { kind: 'renamed', tag: TagRecord }
+  | { kind: 'missing' }
+
 export type SavedFilterRecord = {
   id: string
   accountId: string
@@ -407,6 +417,88 @@ export async function insertTag(
   return { id }
 }
 
+export async function listTagsForAccount(db: Client, accountId: string): Promise<TagRecord[]> {
+  await ensureSchema(db)
+  const result = await db.execute({
+    sql: `SELECT id, account_id, name
+          FROM tags
+          WHERE account_id = ?
+          ORDER BY name, id`,
+    args: [accountId],
+  })
+  return result.rows.map((row) => mapTag(row))
+}
+
+export async function getTagForAccount(db: Client, accountId: string, id: string): Promise<TagRecord | null> {
+  await ensureSchema(db)
+  const result = await db.execute({
+    sql: `SELECT id, account_id, name FROM tags WHERE id = ? AND account_id = ?`,
+    args: [id, accountId],
+  })
+  const row = result.rows[0]
+  return row ? mapTag(row) : null
+}
+
+export async function renameTagForAccount(
+  db: Client,
+  input: { accountId: string, id: string, name: string },
+): Promise<TagRenameOutcome> {
+  const name = input.name.trim()
+  if (!name) {
+    throw new StorageError('태그 이름이 필요합니다.')
+  }
+  await ensureSchema(db)
+  const result = await run(
+    () => db.execute({
+      sql: `UPDATE tags SET name = ?, updated_at = ? WHERE id = ? AND account_id = ?`,
+      args: [name, now(), input.id, input.accountId],
+    }),
+    (detail) => detail.includes('tags') && detail.includes('UNIQUE')
+      ? '같은 이름의 태그가 이미 있습니다.'
+      : undefined,
+  )
+  if (Number(result.rowsAffected) !== 1) {
+    return { kind: 'missing' }
+  }
+  return {
+    kind: 'renamed',
+    tag: {
+      id: input.id,
+      accountId: input.accountId,
+      name,
+    },
+  }
+}
+
+export async function deleteTagForAccount(
+  db: Client,
+  input: { accountId: string, id: string },
+): Promise<boolean> {
+  await ensureSchema(db)
+  const existing = await db.execute({
+    sql: `SELECT id FROM tags WHERE id = ? AND account_id = ?`,
+    args: [input.id, input.accountId],
+  })
+  if (!existing.rows[0]) {
+    return false
+  }
+  await db.batch([
+    {
+      sql: `DELETE FROM memo_tags WHERE tag_id = ?`,
+      args: [input.id],
+    },
+    {
+      sql: `DELETE FROM saved_filter_tags WHERE tag_id = ?`,
+      args: [input.id],
+    },
+    {
+      sql: `DELETE FROM tags WHERE id = ? AND account_id = ?`,
+      args: [input.id, input.accountId],
+    },
+  ], 'write')
+  return true
+}
+
 export async function linkMemoTag(
   db: Client,
   input: { memoId: string, tagId: string },
@@ -544,9 +636,9 @@ function uniqueIds(ids: string[]): string[] {
   return result
 }
 
-async function run(action: () => Promise<unknown>, map: (detail: string) => string | undefined): Promise<void> {
+async function run<T>(action: () => Promise<T>, map: (detail: string) => string | undefined): Promise<T> {
   try {
-    await action()
+    return await action()
   } catch (error) {
     const message = map(constraintDetail(error))
     if (message) {
@@ -564,6 +656,14 @@ function constraintDetail(error: unknown): string {
     return error.message
   }
   return ''
+}
+
+function mapTag(row: Record<string, unknown>): TagRecord {
+  return {
+    id: text(row.id),
+    accountId: text(row.account_id),
+    name: text(row.name),
+  }
 }
 
 function mapMemo(row: Record<string, unknown>): MemoRecord {

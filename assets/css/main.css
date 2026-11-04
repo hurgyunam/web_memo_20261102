@@ -224,6 +224,7 @@ a {
 .dev-conflict:focus-visible,
 .conflict-actions button:focus-visible,
 .danger:focus-visible,
+.quiet:focus-visible,
 .memo-link:focus-visible,
 .memo-tool:focus-visible,
 .text-link:focus-visible {
@@ -460,6 +461,68 @@ a {
 .danger:disabled {
   cursor: wait;
   opacity: 0.7;
+}
+
+.quiet {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.quiet:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.tag-panel {
+  max-width: 40rem;
+}
+
+.tag-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tag-row {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+}
+
+.tag-row-main,
+.tag-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.tag-name {
+  flex: 1 1 8rem;
+  min-width: 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.tag-edit {
+  display: grid;
+  gap: 10px;
+}
+
+.tag-actions .submit,
+.tag-actions .danger,
+.tag-actions .quiet {
+  width: auto;
 }
 
 .memo-list {
