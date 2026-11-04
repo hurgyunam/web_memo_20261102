@@ -1,5 +1,18 @@
 <script setup lang="ts">
-import type { MemoItem } from '~/types/memo'
+import type { MemoItem, MemoSaveRequest } from '~/types/memo'
+import {
+  AUTO_SAVE_INTERVAL_MS,
+  applyDraft,
+  applySaveConflict,
+  applySaveFailure,
+  applySaveSuccess,
+  beginSave,
+  createSaveView,
+  isMemoConflict,
+  savePhaseLabel,
+  shouldAutoSave,
+  type SaveView,
+} from '~/utils/memo-save'
 
 useHead({ title: '편집 · 메모' })
 
@@ -7,8 +20,10 @@ const route = useRoute()
 const nuxtApp = useNuxtApp()
 const deleting = ref(false)
 const message = ref('')
-const baseline = ref<string | null>(null)
-const draft = ref('')
+const view = ref<SaveView | null>(null)
+let alive = true
+let requestSerial = 0
+let autoSaveTimer: ReturnType<typeof setInterval> | undefined
 
 const memoId = computed(() => {
   const value = route.params.id
@@ -25,13 +40,11 @@ const { data, error, pending } = await useFetch<MemoItem>(() => `/api/memos/${me
 })
 
 const memo = computed(() => data.value ?? null)
-const saveState = computed<'saved' | 'pending'>(() => {
-  if (baseline.value === null || draft.value === baseline.value) {
-    return 'saved'
-  }
-  return 'pending'
-})
-const saveLabel = computed(() => (saveState.value === 'saved' ? '저장됨' : '저장 대기'))
+const savePhase = computed(() => view.value?.phase ?? 'saved')
+const saveLabel = computed(() => savePhaseLabel(savePhase.value))
+const saveDataState = computed(() => (savePhase.value === 'saved' ? 'ok' : savePhase.value))
+const draft = computed(() => view.value?.draft ?? '')
+const canSave = computed(() => view.value !== null && beginSave(view.value) !== null)
 const loadError = computed(() => {
   if (message.value) {
     return message.value
@@ -43,17 +56,69 @@ const loadError = computed(() => {
 })
 
 watch(memoId, () => {
-  baseline.value = null
-  draft.value = ''
+  view.value = null
+  requestSerial += 1
+})
+
+onMounted(() => {
+  autoSaveTimer = setInterval(() => {
+    if (!view.value || !shouldAutoSave(view.value)) {
+      return
+    }
+    void saveDraft()
+  }, AUTO_SAVE_INTERVAL_MS)
+})
+
+onBeforeUnmount(() => {
+  alive = false
+  requestSerial += 1
+  if (autoSaveTimer) {
+    clearInterval(autoSaveTimer)
+  }
 })
 
 function onBaseline(markdown: string) {
-  baseline.value = markdown
-  draft.value = markdown
+  const current = memo.value
+  if (!current) {
+    return
+  }
+  view.value = createSaveView(markdown, current.version)
 }
 
 function onDraft(markdown: string) {
-  draft.value = markdown
+  if (!view.value) {
+    return
+  }
+  view.value = applyDraft(view.value, markdown)
+}
+
+async function saveDraft() {
+  const current = memo.value
+  const started = view.value ? beginSave(view.value) : null
+  if (!current || !started) {
+    return
+  }
+  const token = ++requestSerial
+  const memoIdAtStart = current.id
+  view.value = started.view
+  try {
+    const saved = await $fetch<MemoItem>(`/api/memos/${memoIdAtStart}`, {
+      method: 'PUT',
+      body: {
+        body: started.snapshot,
+        baseVersion: started.baseVersion,
+      } satisfies MemoSaveRequest,
+    })
+    if (!alive || token !== requestSerial || !view.value) {
+      return
+    }
+    view.value = applySaveSuccess(view.value, started.snapshot, saved.version)
+  } catch (caught) {
+    if (!alive || token !== requestSerial || !view.value) {
+      return
+    }
+    view.value = isMemoConflict(caught) ? applySaveConflict(view.value) : applySaveFailure(view.value)
+  }
 }
 
 async function removeMemo() {
@@ -77,14 +142,75 @@ async function removeMemo() {
     <div class="memo-toolbar">
       <div>
         <h1>편집</h1>
-        <p class="lead">위지윅으로 고칩니다. 저장될 값은 이 화면이 만든 마크다운입니다.</p>
+        <p class="lead">위지윅으로 고칩니다. 저장하거나, 바꾸면 자동으로 저장됩니다.</p>
       </div>
-      <NuxtLink
-        class="text-link"
-        to="/memos"
-      >
-        목록
-      </NuxtLink>
+      <div class="memo-actions">
+        <span
+          v-if="memo"
+          class="save-slot"
+          :title="saveLabel"
+        >
+          <button
+            class="save-button"
+            type="button"
+            :data-state="saveDataState"
+            :data-save-state="savePhase"
+            :disabled="!canSave"
+            :aria-busy="savePhase === 'saving'"
+            :aria-label="saveLabel"
+            @click="saveDraft"
+          >
+            <svg
+              v-if="savePhase === 'saved'"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path d="M5 12.5 9.5 17 19 7.5" />
+            </svg>
+            <svg
+              v-else-if="savePhase === 'saving'"
+              class="spin"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path d="M12 4a8 8 0 1 1-7.5 5" />
+            </svg>
+            <svg
+              v-else-if="savePhase === 'failed'"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path d="M12 4 3.5 19h17L12 4z" />
+              <path d="M12 10v4M12 16.5h.01" />
+            </svg>
+            <svg
+              v-else-if="savePhase === 'conflict'"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path d="M8 7h5a4 4 0 0 1 0 8H8" />
+              <path d="M16 17h-5a4 4 0 0 1 0-8h5" />
+            </svg>
+            <svg
+              v-else
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path d="M12 4v11M8 11l4 4 4-4M5 20h14" />
+            </svg>
+          </button>
+          <span
+            class="save-live"
+            role="status"
+          >저장 상태 {{ saveLabel }}</span>
+        </span>
+        <NuxtLink
+          class="text-link"
+          to="/memos"
+        >
+          목록
+        </NuxtLink>
+      </div>
     </div>
     <p
       v-if="pending && !memo"
@@ -100,15 +226,6 @@ async function removeMemo() {
       {{ loadError }}
     </p>
     <template v-if="memo">
-      <p
-        class="status"
-        :data-state="saveState === 'saved' ? 'ok' : 'pending'"
-        :data-save-state="saveState"
-        role="status"
-      >
-        <span class="status-label">저장 상태</span>
-        <span class="status-value">{{ saveLabel }}</span>
-      </p>
       <MemoWysiwyg
         :key="memo.id"
         :markdown="memo.body"

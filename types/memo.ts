@@ -4,3 +4,8 @@ export type MemoItem = {
   version: number
   updatedAt: string
 }
+
+export type MemoSaveRequest = {
+  body: string
+  baseVersion: number
+}

@@ -8,7 +8,8 @@
     "preview": "node scripts/with-env.mjs preview",
     "postinstall": "nuxt prepare",
     "verify:storage": "tsx scripts/verify-storage.ts",
-    "verify:security-code": "tsx scripts/verify-security-code.ts"
+    "verify:security-code": "tsx scripts/verify-security-code.ts",
+    "verify:memo-save": "tsx scripts/verify-memo-save.ts"
   },
   "dependencies": {
     "@floating-ui/dom": "^1.8.0",

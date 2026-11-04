@@ -345,6 +345,45 @@ export async function deleteMemoForAccount(
   return true
 }
 
+export type MemoSaveOutcome =
+  | { kind: 'saved', memo: MemoRecord }
+  | { kind: 'missing' }
+  | { kind: 'conflict' }
+
+export async function saveMemoIfCurrentVersion(
+  db: Client,
+  input: { accountId: string, id: string, body: string, baseVersion: number },
+): Promise<MemoSaveOutcome> {
+  if (!Number.isInteger(input.baseVersion) || input.baseVersion < 1) {
+    throw new StorageError('저장 버전이 올바르지 않습니다.')
+  }
+  await ensureSchema(db)
+  const timestamp = now()
+  const result = await db.execute({
+    sql: `UPDATE memos
+          SET body = ?, version = version + 1, updated_at = ?
+          WHERE id = ? AND account_id = ? AND version = ?`,
+    args: [input.body, timestamp, input.id, input.accountId, input.baseVersion],
+  })
+  if (Number(result.rowsAffected) === 1) {
+    return {
+      kind: 'saved',
+      memo: {
+        id: input.id,
+        accountId: input.accountId,
+        body: input.body,
+        version: input.baseVersion + 1,
+        updatedAt: timestamp,
+      },
+    }
+  }
+  const existing = await getMemoForAccount(db, input.accountId, input.id)
+  if (!existing) {
+    return { kind: 'missing' }
+  }
+  return { kind: 'conflict' }
+}
+
 export async function insertTag(
   db: Client,
   input: { accountId: string, name: string },

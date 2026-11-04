@@ -4,6 +4,7 @@ import { Markdown } from '@tiptap/markdown'
 import StarterKit from '@tiptap/starter-kit'
 import { Editor, EditorContent } from '@tiptap/vue-3'
 import { onBeforeUnmount, onMounted, shallowRef } from 'vue'
+import { isNewMemoBody } from '~/utils/new-memo'
 
 const props = defineProps<{
   markdown: string
@@ -77,6 +78,12 @@ onMounted(() => {
     },
   })
   editor.value = instance
+  if (isNewMemoBody(props.markdown)) {
+    const first = instance.state.doc.firstChild
+    if (first && first.content.size > 0) {
+      instance.chain().setTextSelection({ from: 1, to: 1 + first.content.size }).focus().run()
+    }
+  }
   emit('baseline', instance.getMarkdown())
 })
 

@@ -15,6 +15,7 @@ import {
   getSavedFilter,
   insertAccount,
   insertMemo,
+  saveMemoIfCurrentVersion,
   insertSavedFilter,
   insertSecurityCode,
   insertSession,
@@ -247,6 +248,57 @@ async function verifyDatabase(): Promise<void> {
     )
 
     const other = await insertAccount(db, { email: 'other@example.com', password: 'other-password-value' })
+    const editable = await insertMemo(db, { accountId: account.id, body: '처음' })
+    const savedOnce = await saveMemoIfCurrentVersion(db, {
+      accountId: account.id,
+      id: editable.id,
+      body: '고친 본문',
+      baseVersion: 1,
+    })
+    assert(savedOnce.kind === 'saved' && savedOnce.memo.body === '고친 본문' && savedOnce.memo.version === 2, '같은 버전으로 본문을 저장하지 못했습니다.')
+    assert((await getMemo(db, editable.id))?.body === '고친 본문', '저장한 본문이 조회되지 않습니다.')
+    assert((await getMemo(db, editable.id))?.version === 2, '저장 후 버전이 올라가지 않았습니다.')
+    const conflicted = await saveMemoIfCurrentVersion(db, {
+      accountId: account.id,
+      id: editable.id,
+      body: '덮어쓰면 안 되는 본문',
+      baseVersion: 1,
+    })
+    assert(conflicted.kind === 'conflict', '다른 저장 버전을 충돌로 두지 않았습니다.')
+    assert((await getMemo(db, editable.id))?.body === '고친 본문', '충돌 때 서버 본문을 덮어썼습니다.')
+    assert((await getMemo(db, editable.id))?.version === 2, '충돌 때 저장 버전이 바뀌었습니다.')
+    const emptySaved = await saveMemoIfCurrentVersion(db, {
+      accountId: account.id,
+      id: editable.id,
+      body: '',
+      baseVersion: 2,
+    })
+    assert(emptySaved.kind === 'saved' && emptySaved.memo.version === 3, '빈 본문을 저장하지 못했습니다.')
+    assert((await getMemo(db, editable.id))?.body === '', '빈 본문이 반영되지 않았습니다.')
+    const foreignSave = await saveMemoIfCurrentVersion(db, {
+      accountId: other.id,
+      id: editable.id,
+      body: '다른 계정',
+      baseVersion: 3,
+    })
+    assert(foreignSave.kind === 'missing', '다른 계정의 메모가 저장되었습니다.')
+    assert((await getMemo(db, editable.id))?.body === '', '다른 계정 저장 시도가 본문을 바꿨습니다.')
+    const missingSave = await saveMemoIfCurrentVersion(db, {
+      accountId: account.id,
+      id: 'missing-memo',
+      body: '없음',
+      baseVersion: 1,
+    })
+    assert(missingSave.kind === 'missing', '없는 메모 저장을 구분하지 못했습니다.')
+    await rejectsWith(
+      () => saveMemoIfCurrentVersion(db, {
+        accountId: account.id,
+        id: editable.id,
+        body: 'x',
+        baseVersion: 0,
+      }),
+      '저장 버전이 올바르지 않습니다.',
+    )
     const work = await insertTag(db, { accountId: account.id, name: '업무' })
     const urgent = await insertTag(db, { accountId: account.id, name: '긴급' })
     const personal = await insertTag(db, { accountId: account.id, name: '개인' })

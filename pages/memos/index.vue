@@ -52,7 +52,9 @@ function preview(body: string): string {
   if (!line) {
     return '빈 메모'
   }
-  return line.length > 80 ? `${line.slice(0, 80)}…` : line
+  const title = line.replace(/^#{1,6}\s+/, '').trim()
+  const shown = title || line
+  return shown.length > 80 ? `${shown.slice(0, 80)}…` : shown
 }
 
 function formatUpdated(value: string): string {
