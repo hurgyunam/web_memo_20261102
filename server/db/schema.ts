@@ -54,6 +54,16 @@ export const schemaStatements = [
     tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
     PRIMARY KEY (memo_id, tag_id)
   )`,
+  `CREATE TABLE IF NOT EXISTS memo_commits (
+    id TEXT PRIMARY KEY,
+    memo_id TEXT NOT NULL REFERENCES memos(id) ON DELETE CASCADE,
+    body TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (memo_id, seq),
+    CHECK (typeof(seq) = 'integer' AND seq >= 1),
+    CHECK (length(created_at) > 0)
+  )`,
   `CREATE TABLE IF NOT EXISTS saved_filters (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -86,6 +96,7 @@ export const schemaStatements = [
   `CREATE INDEX IF NOT EXISTS idx_memos_account_updated ON memos(account_id, updated_at)`,
   `CREATE INDEX IF NOT EXISTS idx_tags_account ON tags(account_id)`,
   `CREATE INDEX IF NOT EXISTS idx_memo_tags_tag ON memo_tags(tag_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_memo_commits_memo_seq ON memo_commits(memo_id, seq)`,
   `CREATE INDEX IF NOT EXISTS idx_saved_filters_account ON saved_filters(account_id)`,
   `CREATE INDEX IF NOT EXISTS idx_saved_filter_tags_tag ON saved_filter_tags(tag_id)`,
   `CREATE TRIGGER IF NOT EXISTS memo_tags_same_account

@@ -1,14 +1,39 @@
 <script setup lang="ts">
-import type { MemoItem } from '~/types/memo'
+import type { AppliedFilter } from '~/types/filter'
+import type { MemoItem, MemoList } from '~/types/memo'
 
 useHead({ title: '메모' })
 
+const route = useRoute()
 const nuxtApp = useNuxtApp()
 const adding = ref(false)
 const deletingId = ref('')
 const message = ref('')
 
-const { data, error, pending, refresh } = await useFetch<{ memos: MemoItem[] }>('/api/memos', {
+const requestQuery = computed(() => {
+  const query: Record<string, string> = {}
+  const filter = queryText(route.query.filter)
+  const include = queryText(route.query.include)
+  const exclude = queryText(route.query.exclude)
+  const keyword = queryText(route.query.keyword)
+  if (filter) {
+    query.filter = filter
+  }
+  if (include) {
+    query.include = include
+  }
+  if (exclude) {
+    query.exclude = exclude
+  }
+  if (keyword) {
+    query.keyword = keyword
+  }
+  return query
+})
+
+const { data, error, pending, refresh } = await useFetch<MemoList>('/api/memos', {
+  query: requestQuery,
+  watch: [requestQuery],
   getCachedData(key) {
     if (nuxtApp.isHydrating) {
       return nuxtApp.payload.data[key]
@@ -17,6 +42,7 @@ const { data, error, pending, refresh } = await useFetch<{ memos: MemoItem[] }>(
 })
 
 const memos = computed(() => data.value?.memos ?? [])
+const applied = computed(() => data.value?.applied ?? null)
 const loadError = computed(() => error.value
   ? accountErrorMessage(error.value, '메모 목록을 불러오지 못했습니다.')
   : '')
@@ -57,6 +83,22 @@ function preview(body: string): string {
   return shown.length > 80 ? `${shown.slice(0, 80)}…` : shown
 }
 
+function queryText(value: unknown): string {
+  if (Array.isArray(value)) {
+    return typeof value[0] === 'string' ? value[0] : ''
+  }
+  return typeof value === 'string' ? value : ''
+}
+
+function tagLabel(tags: { name: string }[]): string {
+  return tags.length > 0 ? tags.map((tag) => tag.name).join(', ') : '없음'
+}
+
+function describeApplied(filter: AppliedFilter): string {
+  const keyword = filter.keyword ? `키워드 “${filter.keyword}”` : '키워드 없음'
+  return `포함 ${tagLabel(filter.includeTags)} · 제외 ${tagLabel(filter.excludeTags)} · ${keyword}`
+}
+
 function formatUpdated(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) {
@@ -76,7 +118,12 @@ function formatUpdated(value: string): string {
     <div class="memo-toolbar">
       <div>
         <h1>메모</h1>
-        <p class="lead">이 계정의 메모를 최근 수정 순으로 보여 줍니다.</p>
+        <p
+          v-if="!loadError"
+          class="lead"
+        >
+          {{ applied ? '이 조건에 맞는 메모를 최근 수정 순으로 보여 줍니다.' : '이 계정의 메모를 최근 수정 순으로 보여 줍니다.' }}
+        </p>
       </div>
       <button
         class="submit"
@@ -86,6 +133,30 @@ function formatUpdated(value: string): string {
       >
         {{ adding ? '추가 중' : '메모 추가' }}
       </button>
+    </div>
+    <div
+      v-if="applied && !loadError"
+      class="memo-filter"
+    >
+      <p>
+        <strong>{{ applied.name || '입력한 조건' }}</strong>
+      </p>
+      <p>{{ describeApplied(applied) }}</p>
+      <div class="memo-filter-actions">
+        <button
+          class="text-link"
+          type="button"
+          @click="navigateTo('/memos')"
+        >
+          전체 메모
+        </button>
+        <NuxtLink
+          class="text-link"
+          to="/filters"
+        >
+          필터
+        </NuxtLink>
+      </div>
     </div>
     <p
       v-if="loadError || message"
@@ -104,10 +175,10 @@ function formatUpdated(value: string): string {
       v-else-if="memos.length === 0 && !loadError"
       class="lead"
     >
-      메모가 없습니다.
+      {{ applied ? '조건에 맞는 메모가 없습니다.' : '메모가 없습니다.' }}
     </p>
     <ul
-      v-else-if="memos.length > 0"
+      v-else-if="memos.length > 0 && !loadError"
       class="memo-list"
     >
       <li

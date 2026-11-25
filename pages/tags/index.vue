@@ -191,6 +191,13 @@ async function removeTag(tag: TagItem) {
         >
           <span class="tag-name">{{ tag.name }}</span>
           <div class="tag-actions">
+            <NuxtLink
+              class="quiet"
+              :to="`/tags/${tag.id}`"
+              :aria-label="`${tag.name} 메모 지정`"
+            >
+              메모 지정
+            </NuxtLink>
             <button
               class="quiet"
               type="button"

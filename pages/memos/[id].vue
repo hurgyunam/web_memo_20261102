@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { MemoItem, MemoSaveRequest } from '~/types/memo'
+import type { MemoCommit, MemoCommitResult, MemoItem, MemoSaveRequest } from '~/types/memo'
 import type { TagItem } from '~/types/tag'
 import {
   AUTO_SAVE_INTERVAL_MS,
@@ -25,14 +25,21 @@ const isLocalDev = import.meta.dev
 const deleting = ref(false)
 const resolving = ref(false)
 const causingConflict = ref(false)
+const committing = ref(false)
 const message = ref('')
+const commitNotice = ref('')
+const knownServerBody = ref<string | null>(null)
 const tagQuery = ref('')
 const tagMenuOpen = ref(false)
 const suggestionIndex = ref(-1)
+const suggestionFromKeyboard = ref(false)
+const selectedTagIds = ref<string[]>([])
+const pendingLinkIds = ref<string[]>([])
+const optimisticTags = ref<TagItem[]>([])
 const addingTag = ref(false)
-const linkingId = ref('')
 const unlinkingId = ref('')
 const tagMessage = ref('')
+let tagFocusTimer: ReturnType<typeof setTimeout> | undefined
 const view = ref<SaveView | null>(null)
 const wysiwyg = ref<{ replaceMarkdown: (markdown: string) => string } | null>(null)
 let alive = true
@@ -80,9 +87,30 @@ const {
   },
 })
 
+const {
+  data: commitData,
+  error: commitError,
+  pending: commitsPending,
+  refresh: refreshCommits,
+} = await useFetch<{ commits: MemoCommit[] }>(() => `/api/memos/${memoId.value}/commits`, {
+  watch: [memoId],
+  getCachedData(key) {
+    if (nuxtApp.isHydrating) {
+      return nuxtApp.payload.data[key]
+    }
+  },
+})
+
 const memo = computed(() => data.value ?? null)
 const accountTags = computed(() => tagCatalog.value?.tags ?? [])
-const linkedTags = computed(() => linkedData.value?.tags ?? [])
+const linkedTags = computed(() => {
+  const saved = linkedData.value?.tags ?? []
+  const savedIds = new Set(saved.map((tag) => tag.id))
+  return [
+    ...saved,
+    ...optimisticTags.value.filter((tag) => !savedIds.has(tag.id)),
+  ]
+})
 const linkedTagIds = computed(() => new Set(linkedTags.value.map((tag) => tag.id)))
 const tagSuggestions = computed(() => {
   const query = tagQuery.value.trim().toLowerCase()
@@ -96,7 +124,18 @@ const tagSuggestions = computed(() => {
     return tag.name.toLowerCase().includes(query)
   })
 })
+const selectedTags = computed(() => {
+  const selected = new Set(selectedTagIds.value)
+  return accountTags.value.filter((tag) => selected.has(tag.id) && !linkedTagIds.value.has(tag.id))
+})
 const showTagSuggestions = computed(() => tagMenuOpen.value && tagSuggestions.value.length > 0)
+const tagSubmitLabel = computed(() => {
+  const count = selectedTags.value.length
+  if (count > 0) {
+    return `${count}개 추가`
+  }
+  return addingTag.value ? '추가 중' : '추가'
+})
 const activeSuggestionId = computed(() => {
   const tag = tagSuggestions.value[suggestionIndex.value]
   return tag ? `memo-tag-option-${tag.id}` : undefined
@@ -117,7 +156,36 @@ const savePhase = computed(() => view.value?.phase ?? 'saved')
 const saveLabel = computed(() => savePhaseLabel(savePhase.value))
 const saveDataState = computed(() => (savePhase.value === 'saved' ? 'ok' : savePhase.value))
 const draft = computed(() => view.value?.draft ?? '')
-const canSave = computed(() => view.value !== null && beginSave(view.value) !== null)
+const canSave = computed(() => view.value !== null && beginSave(view.value) !== null && !committing.value)
+const commits = computed(() => commitData.value?.commits ?? [])
+const canCommit = computed(() => {
+  const current = view.value
+  if (!current || committing.value || resolving.value || causingConflict.value) {
+    return false
+  }
+  if (current.phase === 'saving' || current.phase === 'conflict') {
+    return false
+  }
+  const head = commits.value[0]
+  return !head || head.body !== current.draft
+})
+const commitTitle = computed(() => {
+  if (committing.value) {
+    return '커밋 중'
+  }
+  const current = view.value
+  const head = commits.value[0]
+  if (current && head && head.body === current.draft && current.phase !== 'saving' && current.phase !== 'conflict') {
+    return '마지막 커밋과 같습니다'
+  }
+  return '현재 본문을 히스토리에 남깁니다'
+})
+const commitLoadError = computed(() => {
+  if (commitError.value) {
+    return accountErrorMessage(commitError.value, '히스토리를 불러오지 못했습니다.')
+  }
+  return ''
+})
 const loadError = computed(() => {
   if (message.value) {
     return message.value
@@ -128,23 +196,50 @@ const loadError = computed(() => {
   return ''
 })
 
+watch(memo, (item) => {
+  if (!item || item.id !== memoId.value || knownServerBody.value !== null) {
+    return
+  }
+  knownServerBody.value = item.body
+}, { immediate: true })
+
 watch(memoId, () => {
   view.value = null
   requestSerial += 1
+  commitNotice.value = ''
+  const current = memo.value
+  knownServerBody.value = current && current.id === memoId.value ? current.body : null
   tagQuery.value = ''
   tagMenuOpen.value = false
   suggestionIndex.value = -1
+  suggestionFromKeyboard.value = false
+  selectedTagIds.value = []
+  pendingLinkIds.value = []
+  optimisticTags.value = []
   tagMessage.value = ''
+})
+
+watch(linkedData, () => {
+  const savedIds = new Set((linkedData.value?.tags ?? []).map((tag) => tag.id))
+  optimisticTags.value = optimisticTags.value.filter((tag) => !savedIds.has(tag.id))
+  selectedTagIds.value = selectedTagIds.value.filter((id) => !savedIds.has(id))
 })
 
 watch(tagQuery, () => {
   suggestionIndex.value = -1
+  suggestionFromKeyboard.value = false
+})
+
+watch(() => view.value?.draft, (next, prev) => {
+  if (prev !== undefined && next !== prev) {
+    commitNotice.value = ''
+  }
 })
 
 onMounted(() => {
   document.addEventListener('visibilitychange', refreshTagsWhenVisible)
   autoSaveTimer = setInterval(() => {
-    if (!view.value || !shouldAutoSave(view.value)) {
+    if (committing.value || !view.value || !shouldAutoSave(view.value)) {
       return
     }
     void saveDraft()
@@ -157,6 +252,9 @@ onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', refreshTagsWhenVisible)
   if (autoSaveTimer) {
     clearInterval(autoSaveTimer)
+  }
+  if (tagFocusTimer) {
+    clearTimeout(tagFocusTimer)
   }
 })
 
@@ -183,32 +281,110 @@ function onDraft(markdown: string) {
   view.value = applyDraft(view.value, markdown)
 }
 
-async function saveDraft() {
-  const current = memo.value
+async function saveDraft(): Promise<boolean> {
   const started = view.value ? beginSave(view.value) : null
-  if (!current || !started) {
-    return
+  if (!memo.value || !started) {
+    return false
+  }
+  return saveSnapshot(started.snapshot, started.baseVersion)
+}
+
+async function saveSnapshot(snapshot: string, baseVersion: number): Promise<boolean> {
+  const current = memo.value
+  if (!current || !view.value || view.value.phase === 'conflict') {
+    return false
   }
   const token = ++requestSerial
   const memoIdAtStart = current.id
-  view.value = started.view
+  view.value = { ...view.value, phase: 'saving' }
   try {
     const saved = await $fetch<MemoItem>(`/api/memos/${memoIdAtStart}`, {
       method: 'PUT',
       body: {
-        body: started.snapshot,
-        baseVersion: started.baseVersion,
+        body: snapshot,
+        baseVersion,
       } satisfies MemoSaveRequest,
     })
     if (!alive || token !== requestSerial || !view.value) {
-      return
+      return false
     }
-    view.value = applySaveSuccess(view.value, started.snapshot, saved.version)
+    view.value = applySaveSuccess(view.value, snapshot, saved.version)
+    knownServerBody.value = snapshot
+    return true
   } catch (caught) {
     if (!alive || token !== requestSerial || !view.value) {
-      return
+      return false
     }
     view.value = isMemoConflict(caught) ? applySaveConflict(view.value) : applySaveFailure(view.value)
+    return false
+  }
+}
+
+async function commitHistory() {
+  const currentMemo = memo.value
+  const currentView = view.value
+  if (!currentMemo || !currentView || !canCommit.value || committing.value) {
+    return
+  }
+  committing.value = true
+  commitNotice.value = ''
+  message.value = ''
+  const memoIdAtStart = currentMemo.id
+  try {
+    if (beginSave(currentView)) {
+      const saved = await saveDraft()
+      if (!alive || memo.value?.id !== memoIdAtStart) {
+        return
+      }
+      if (!saved || !view.value) {
+        if (view.value?.phase === 'conflict') {
+          message.value = '충돌을 해결한 뒤에 커밋할 수 있습니다.'
+        } else if (!message.value) {
+          message.value = '저장하지 못해 커밋하지 못했습니다.'
+        }
+        return
+      }
+    }
+    if (view.value && knownServerBody.value !== view.value.baseline) {
+      const saved = await saveSnapshot(view.value.baseline, view.value.baselineVersion)
+      if (!alive || memo.value?.id !== memoIdAtStart) {
+        return
+      }
+      if (!saved || !view.value) {
+        if (view.value?.phase === 'conflict') {
+          message.value = '충돌을 해결한 뒤에 커밋할 수 있습니다.'
+        } else if (!message.value) {
+          message.value = '저장하지 못해 커밋하지 못했습니다.'
+        }
+        return
+      }
+    }
+    const ready = view.value
+    if (!alive || !ready || memo.value?.id !== memoIdAtStart) {
+      return
+    }
+    const result = await $fetch<MemoCommitResult>(`/api/memos/${memoIdAtStart}/commits`, {
+      method: 'POST',
+      body: {
+        body: ready.baseline,
+        baseVersion: ready.baselineVersion,
+      } satisfies MemoSaveRequest,
+    })
+    if (!alive || memo.value?.id !== memoIdAtStart) {
+      return
+    }
+    commitNotice.value = result.kind === 'created' ? '커밋했습니다.' : '마지막 커밋과 같은 본문입니다.'
+    await refreshCommits()
+  } catch (caught) {
+    if (!alive || memo.value?.id !== memoIdAtStart) {
+      return
+    }
+    if (isMemoConflict(caught) && view.value) {
+      view.value = applySaveConflict(view.value)
+    }
+    message.value = accountErrorMessage(caught, '커밋하지 못했습니다.')
+  } finally {
+    committing.value = false
   }
 }
 
@@ -230,6 +406,7 @@ async function keepServerMemo() {
       throw new Error('편집기가 없습니다.')
     }
     view.value = acceptServerMemo(markdown, latest.version)
+    knownServerBody.value = latest.body
   } catch (caught) {
     if (!alive || token !== requestSerial || !view.value) {
       return
@@ -266,6 +443,7 @@ async function keepCurrentDraft() {
       return
     }
     view.value = applySaveSuccess(view.value, snapshot, saved.version)
+    knownServerBody.value = snapshot
   } catch (caught) {
     if (!alive || token !== requestSerial || !view.value) {
       return
@@ -328,6 +506,7 @@ function onTagKeydown(event: KeyboardEvent) {
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
     event.preventDefault()
     tagMenuOpen.value = true
+    suggestionFromKeyboard.value = true
     const count = tagSuggestions.value.length
     if (count === 0) {
       return
@@ -339,46 +518,127 @@ function onTagKeydown(event: KeyboardEvent) {
     suggestionIndex.value = suggestionIndex.value <= 0 ? count - 1 : suggestionIndex.value - 1
     return
   }
+  if (event.key === ' ' && tagMenuOpen.value && suggestionFromKeyboard.value && suggestionIndex.value >= 0) {
+    event.preventDefault()
+    const tag = tagSuggestions.value[suggestionIndex.value]
+    if (tag) {
+      toggleTagSelection(tag)
+    }
+    return
+  }
   if (event.key === 'Escape') {
-    tagMenuOpen.value = false
-    suggestionIndex.value = -1
+    closeTagMenu()
   }
 }
 
 function closeTagMenu() {
   tagMenuOpen.value = false
   suggestionIndex.value = -1
+  suggestionFromKeyboard.value = false
 }
 
-async function chooseSuggestion(tag: TagItem) {
-  const current = memo.value
-  if (!current || addingTag.value || linkingId.value || unlinkingId.value) {
+function onTagFocusOut(event: FocusEvent) {
+  const form = event.currentTarget
+  if (!(form instanceof HTMLElement)) {
     return
   }
-  linkingId.value = tag.id
-  tagMessage.value = ''
-  try {
-    await $fetch<TagItem>(`/api/memos/${current.id}/tags`, {
-      method: 'POST',
-      body: { tagId: tag.id },
-    })
-    tagQuery.value = ''
+  const next = event.relatedTarget
+  if (next instanceof Node && form.contains(next)) {
+    return
+  }
+  if (tagFocusTimer) {
+    clearTimeout(tagFocusTimer)
+  }
+  tagFocusTimer = setTimeout(() => {
+    if (!alive || form.contains(document.activeElement)) {
+      return
+    }
     closeTagMenu()
+  }, 0)
+}
+
+function toggleTagSelection(tag: TagItem) {
+  if (linkedTagIds.value.has(tag.id) || pendingLinkIds.value.includes(tag.id)) {
+    return
+  }
+  if (selectedTagIds.value.includes(tag.id)) {
+    selectedTagIds.value = selectedTagIds.value.filter((id) => id !== tag.id)
+    return
+  }
+  selectedTagIds.value = [...selectedTagIds.value, tag.id]
+}
+
+async function linkTags(memoIdAtStart: string, tags: TagItem[]) {
+  const known = new Set([
+    ...(linkedData.value?.tags ?? []).map((tag) => tag.id),
+    ...optimisticTags.value.map((tag) => tag.id),
+    ...pendingLinkIds.value,
+  ])
+  const fresh = tags.filter((tag) => !known.has(tag.id))
+  if (fresh.length === 0) {
+    return
+  }
+  tagMessage.value = ''
+  pendingLinkIds.value = [...pendingLinkIds.value, ...fresh.map((tag) => tag.id)]
+  optimisticTags.value = [...optimisticTags.value, ...fresh]
+  tagMenuOpen.value = true
+  const failedNames: string[] = []
+  let failureMessage = ''
+  await Promise.all(fresh.map(async (tag) => {
+    try {
+      await $fetch<TagItem>(`/api/memos/${memoIdAtStart}/tags`, {
+        method: 'POST',
+        body: { tagId: tag.id },
+      })
+    } catch (caught) {
+      failedNames.push(tag.name)
+      optimisticTags.value = optimisticTags.value.filter((item) => item.id !== tag.id)
+      pendingLinkIds.value = pendingLinkIds.value.filter((id) => id !== tag.id)
+      if (!failureMessage) {
+        failureMessage = accountErrorMessage(caught, '태그를 연결하지 못했습니다.')
+      }
+    }
+  }))
+  if (!alive || memo.value?.id !== memoIdAtStart) {
+    return
+  }
+  if (failedNames.length === 1) {
+    tagMessage.value = failureMessage
+  } else if (failedNames.length > 1) {
+    tagMessage.value = `${failureMessage} (${failedNames.join(', ')})`
+  }
+  const finishedIds = new Set(fresh.map((tag) => tag.id))
+  try {
     await refreshLinked()
   } catch (caught) {
-    tagMessage.value = accountErrorMessage(caught, '태그를 연결하지 못했습니다.')
+    if (!tagMessage.value) {
+      tagMessage.value = accountErrorMessage(caught, '연결된 태그를 불러오지 못했습니다.')
+    }
   } finally {
-    linkingId.value = ''
+    pendingLinkIds.value = pendingLinkIds.value.filter((id) => !finishedIds.has(id))
   }
 }
 
 async function submitTagQuery() {
-  if (!memo.value || addingTag.value || linkingId.value) {
+  const current = memo.value
+  if (!current) {
+    return
+  }
+  const chosen = selectedTags.value
+  if (chosen.length > 0) {
+    const chosenIds = new Set(chosen.map((tag) => tag.id))
+    selectedTagIds.value = selectedTagIds.value.filter((id) => !chosenIds.has(id))
+    tagMenuOpen.value = true
+    void linkTags(current.id, chosen)
+    return
+  }
+  if (addingTag.value) {
     return
   }
   const picked = tagSuggestions.value[suggestionIndex.value]
   if (picked) {
-    await chooseSuggestion(picked)
+    tagMenuOpen.value = true
+    void linkTags(current.id, [picked])
     return
   }
   const trimmed = tagQuery.value.trim()
@@ -388,21 +648,26 @@ async function submitTagQuery() {
   }
   const existing = findExistingTag(trimmed)
   if (existing) {
-    await chooseSuggestion(existing)
+    tagMenuOpen.value = true
+    void linkTags(current.id, [existing])
     return
   }
   addingTag.value = true
   tagMessage.value = ''
+  const memoIdAtStart = current.id
   try {
     const created = await createOrFindTag(trimmed)
-    await $fetch<TagItem>(`/api/memos/${memo.value.id}/tags`, {
-      method: 'POST',
-      body: { tagId: created.id },
-    })
+    if (!alive || memo.value?.id !== memoIdAtStart) {
+      return
+    }
     tagQuery.value = ''
-    closeTagMenu()
-    await Promise.all([refreshCatalog(), refreshLinked()])
+    tagMenuOpen.value = true
+    void refreshCatalog()
+    void linkTags(memoIdAtStart, [created])
   } catch (caught) {
+    if (!alive || memo.value?.id !== memoIdAtStart) {
+      return
+    }
     tagMessage.value = accountErrorMessage(caught, '태그를 추가하지 못했습니다.')
   } finally {
     addingTag.value = false
@@ -427,7 +692,7 @@ async function createOrFindTag(name: string): Promise<TagItem> {
 
 async function unlinkTag(tag: TagItem) {
   const current = memo.value
-  if (!current || linkingId.value || unlinkingId.value) {
+  if (!current || unlinkingId.value || pendingLinkIds.value.includes(tag.id)) {
     return
   }
   unlinkingId.value = tag.id
@@ -440,6 +705,29 @@ async function unlinkTag(tag: TagItem) {
   } finally {
     unlinkingId.value = ''
   }
+}
+
+function preview(body: string): string {
+  const line = body.split(/\r?\n/).map((item) => item.trim()).find(Boolean)
+  if (!line) {
+    return '빈 메모'
+  }
+  const title = line.replace(/^#{1,6}\s+/, '').trim()
+  const shown = title || line
+  return shown.length > 80 ? `${shown.slice(0, 80)}…` : shown
+}
+
+function formatCommitted(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return ''
+  }
+  return new Intl.DateTimeFormat('ko-KR', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
 }
 
 async function removeMemo() {
@@ -463,7 +751,7 @@ async function removeMemo() {
     <div class="memo-toolbar">
       <div>
         <h1>편집</h1>
-        <p class="lead">위지윅으로 고칩니다. 저장하거나, 바꾸면 자동으로 저장됩니다.</p>
+        <p class="lead">위지윅으로 고칩니다. 저장하거나, 바꾸면 자동으로 저장됩니다. Commit은 그 시점의 본문을 히스토리에 쌓습니다.</p>
       </div>
       <div class="memo-actions">
         <span
@@ -526,10 +814,22 @@ async function removeMemo() {
           >저장 상태 {{ saveLabel }}</span>
         </span>
         <button
+          v-if="memo"
+          class="submit commit-button"
+          type="button"
+          data-commit-button
+          :title="commitTitle"
+          :disabled="!canCommit"
+          :aria-busy="committing ? 'true' : 'false'"
+          @click="commitHistory"
+        >
+          {{ committing ? '커밋 중' : 'Commit' }}
+        </button>
+        <button
           v-if="isLocalDev && memo"
           class="dev-conflict"
           type="button"
-          :disabled="causingConflict || resolving || savePhase === 'saving' || !view"
+          :disabled="causingConflict || resolving || committing || savePhase === 'saving' || !view"
           @click="causeConflict"
         >
           {{ causingConflict ? '충돌 만드는 중' : '충돌 일으키기' }}
@@ -596,6 +896,58 @@ async function removeMemo() {
         aria-hidden="true"
       >{{ draft }}</pre>
       <section
+        class="memo-history"
+        aria-label="커밋 히스토리"
+      >
+        <h2>히스토리</h2>
+        <p
+          v-if="commitNotice"
+          class="notice"
+          role="status"
+        >
+          {{ commitNotice }}
+        </p>
+        <p
+          v-if="commitLoadError"
+          class="alert"
+          role="alert"
+        >
+          {{ commitLoadError }}
+        </p>
+        <p
+          v-if="commitsPending && commits.length === 0 && !commitLoadError"
+          class="lead"
+        >
+          히스토리를 불러오는 중
+        </p>
+        <p
+          v-else-if="commits.length === 0 && !commitLoadError"
+          class="lead"
+        >
+          아직 커밋이 없습니다.
+        </p>
+        <ol
+          v-else-if="commits.length > 0"
+          class="commit-list"
+        >
+          <li
+            v-for="commit in commits"
+            :key="commit.id"
+            class="commit-entry"
+            :data-commit-seq="commit.seq"
+          >
+            <details>
+              <summary>
+                <span class="commit-seq">#{{ commit.seq }}</span>
+                <time :datetime="commit.createdAt">{{ formatCommitted(commit.createdAt) }}</time>
+                <span class="commit-preview">{{ preview(commit.body) }}</span>
+              </summary>
+              <pre class="commit-body">{{ commit.body }}</pre>
+            </details>
+          </li>
+        </ol>
+      </section>
+      <section
         class="memo-tag-box"
         aria-label="태그"
       >
@@ -611,6 +963,7 @@ async function removeMemo() {
           class="tag-link-form"
           novalidate
           @submit.prevent="submitTagQuery"
+          @focusout="onTagFocusOut"
         >
           <div class="tag-suggest">
             <div class="field">
@@ -627,41 +980,47 @@ async function removeMemo() {
                 :aria-expanded="showTagSuggestions ? 'true' : 'false'"
                 :aria-activedescendant="activeSuggestionId"
                 @focus="tagMenuOpen = true"
+                @click="tagMenuOpen = true"
                 @input="tagMenuOpen = true"
                 @keydown="onTagKeydown"
-                @blur="closeTagMenu"
               >
             </div>
             <ul
               v-if="showTagSuggestions"
               id="memo-tag-suggestions"
               class="tag-suggest-list"
-              role="listbox"
+              role="group"
+              aria-label="추가할 태그"
             >
               <li
                 v-for="(tag, index) in tagSuggestions"
                 :key="tag.id"
               >
-                <button
+                <label
                   :id="`memo-tag-option-${tag.id}`"
-                  type="button"
-                  role="option"
-                  :aria-selected="index === suggestionIndex"
+                  class="tag-suggest-option"
                   :data-active="index === suggestionIndex ? 'true' : 'false'"
-                  @mouseenter="suggestionIndex = index"
-                  @mousedown.prevent="chooseSuggestion(tag)"
+                  @mouseenter="suggestionIndex = index; suggestionFromKeyboard = false"
+                  @mousedown.prevent
+                  @click.prevent="toggleTagSelection(tag)"
                 >
-                  {{ tag.name }}
-                </button>
+                  <input
+                    type="checkbox"
+                    tabindex="-1"
+                    :value="tag.id"
+                    :checked="selectedTagIds.includes(tag.id)"
+                  >
+                  <span>{{ tag.name }}</span>
+                </label>
               </li>
             </ul>
           </div>
           <button
             class="submit"
             type="submit"
-            :disabled="addingTag || linkingId.length > 0"
+            :disabled="addingTag && selectedTags.length === 0"
           >
-            {{ addingTag || linkingId ? '추가 중' : '추가' }}
+            {{ tagSubmitLabel }}
           </button>
         </form>
         <p
@@ -686,13 +1045,14 @@ async function removeMemo() {
             class="memo-tag"
             :data-memo-tag="tag.id"
             :data-tag-name="tag.name"
+            :data-linking="pendingLinkIds.includes(tag.id) ? 'true' : 'false'"
           >
             <span class="memo-tag-name">{{ tag.name }}</span>
             <button
               class="memo-tag-remove"
               type="button"
               :aria-label="`${tag.name} 삭제`"
-              :disabled="unlinkingId === tag.id"
+              :disabled="unlinkingId === tag.id || pendingLinkIds.includes(tag.id)"
               @click="unlinkTag(tag)"
             >
               <span aria-hidden="true">×</span>

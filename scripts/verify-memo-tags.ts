@@ -10,6 +10,8 @@ import {
   insertMemo,
   insertTag,
   linkMemoTagForAccount,
+  linkTagToMemosForAccount,
+  listTagMemoAssign,
   listTagsForMemo,
   renameTagForAccount,
   unlinkMemoTagForAccount,
@@ -73,6 +75,46 @@ async function main(): Promise<void> {
     assert(await getTagForAccount(db, owner.id, work.id) !== null, '메모 삭제가 태그를 지웠습니다.')
     assert(await count(db, 'SELECT count(*) AS n FROM tags') === tagCount, '메모 삭제가 다른 태그를 바꿨습니다.')
     assert(names(await listTagsForMemo(db, { accountId: owner.id, memoId: memoA.id })) === '긴급', '다른 메모의 연결이 지워졌습니다.')
+
+    const fresh = await insertMemo(db, { accountId: owner.id, body: '새 메모' })
+    const second = await insertMemo(db, { accountId: owner.id, body: '둘째 메모' })
+    const foreignMemo = await insertMemo(db, { accountId: other.id, body: '남의 메모' })
+    const before = await listTagMemoAssign(db, { accountId: owner.id, tagId: urgent.id })
+    assert(before !== null, '태그 메모 목록을 읽지 못했습니다.')
+    assert(before.tag.id === urgent.id && before.tag.name === '긴급', '지정 화면의 태그가 다릅니다.')
+    assert(before.memos.some((memo) => memo.id === memoA.id && memo.linked), '이미 연결된 메모가 빠졌습니다.')
+    assert(before.memos.some((memo) => memo.id === fresh.id && !memo.linked), '연결 전 메모가 연결된 것으로 보입니다.')
+    assert(!before.memos.some((memo) => memo.id === foreignMemo.id), '다른 계정의 메모가 목록에 있습니다.')
+    assert(await listTagMemoAssign(db, { accountId: owner.id, tagId: foreign.id }) === null, '다른 계정의 태그로 메모 목록을 만들었습니다.')
+
+    const rejected = await linkTagToMemosForAccount(db, {
+      accountId: owner.id,
+      tagId: urgent.id,
+      memoIds: [fresh.id, 'missing-memo'],
+    })
+    assert(rejected.kind === 'missing-memo', '없는 메모가 섞여도 연결되었습니다.')
+    assert(await count(db, 'SELECT count(*) AS n FROM memo_tags WHERE memo_id = ? AND tag_id = ?', [fresh.id, urgent.id]) === 0, '없는 메모가 섞인 요청이 일부 메모를 연결했습니다.')
+
+    const foreignBulk = await linkTagToMemosForAccount(db, {
+      accountId: owner.id,
+      tagId: urgent.id,
+      memoIds: [fresh.id, foreignMemo.id],
+    })
+    assert(foreignBulk.kind === 'missing-memo', '다른 계정의 메모가 연결되었습니다.')
+    assert(await count(db, 'SELECT count(*) AS n FROM memo_tags WHERE memo_id = ? AND tag_id = ?', [fresh.id, urgent.id]) === 0, '다른 계정 메모가 섞인 요청이 일부 메모를 연결했습니다.')
+    assert((await linkTagToMemosForAccount(db, { accountId: owner.id, tagId: foreign.id, memoIds: [fresh.id] })).kind === 'missing-tag', '다른 계정의 태그에 메모가 연결되었습니다.')
+
+    const bulkLinked = await linkTagToMemosForAccount(db, {
+      accountId: owner.id,
+      tagId: urgent.id,
+      memoIds: [fresh.id, second.id, memoA.id, fresh.id],
+    })
+    assert(bulkLinked.kind === 'linked' && bulkLinked.memoIds.join(',') === `${fresh.id},${second.id},${memoA.id}`, '고른 메모가 한 번에 연결되지 않았습니다.')
+    assert(await count(db, 'SELECT count(*) AS n FROM memo_tags WHERE memo_id = ? AND tag_id = ?', [fresh.id, urgent.id]) === 1, '일괄 연결이 중복되었습니다.')
+    assert(await count(db, 'SELECT count(*) AS n FROM memo_tags WHERE memo_id = ? AND tag_id = ?', [second.id, urgent.id]) === 1, '둘째 메모가 연결되지 않았습니다.')
+    assert(names(await listTagsForMemo(db, { accountId: owner.id, memoId: memoA.id })) === '긴급', '이미 연결된 메모의 연결이 늘었습니다.')
+    const after = await listTagMemoAssign(db, { accountId: owner.id, tagId: urgent.id })
+    assert(after?.memos.filter((memo) => memo.linked).map((memo) => memo.id).sort().join(',') === [memoA.id, fresh.id, second.id].sort().join(','), '연결 뒤 목록이 다릅니다.')
   } finally {
     db.close()
     for (let attempt = 0; attempt < 5; attempt += 1) {

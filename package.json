@@ -11,7 +11,9 @@
     "verify:security-code": "tsx scripts/verify-security-code.ts",
     "verify:memo-save": "tsx scripts/verify-memo-save.ts",
     "verify:tags": "tsx scripts/verify-tags.ts",
-    "verify:memo-tags": "tsx scripts/verify-memo-tags.ts"
+    "verify:memo-tags": "tsx scripts/verify-memo-tags.ts",
+    "verify:filters": "tsx scripts/verify-filters.ts",
+    "verify:memo-commits": "tsx scripts/verify-memo-commits.ts"
   },
   "dependencies": {
     "@floating-ui/dom": "^1.8.0",

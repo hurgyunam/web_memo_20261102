@@ -1,9 +1,12 @@
-import { getRouterParam, readBody, type H3Event } from 'h3'
-import type { MemoItem } from '../../types/memo'
+import { getQuery, getRouterParam, readBody, type H3Event } from 'h3'
+import type { MemoItem, MemoList } from '../../types/memo'
+import { mapFilterError, toFilterTag } from './filter-access'
 import {
   deleteMemoForAccount,
   getMemoForAccount,
+  getSavedFilterForAccount,
   insertMemo,
+  listMemosByFilter,
   listMemosForAccount,
   saveMemoIfCurrentVersion,
   StorageError,
@@ -14,10 +17,60 @@ import { AccountActionError } from './account-access'
 import { getDb } from './db'
 import { getSessionAccountId } from './session'
 
-export async function listOwnMemos(event: H3Event): Promise<{ memos: MemoItem[] }> {
+export async function listOwnMemos(event: H3Event): Promise<MemoList> {
   const accountId = await requireAccount(event)
-  const memos = await listMemosForAccount(await getDb(), accountId)
-  return { memos: memos.map(toMemoItem) }
+  const db = await getDb()
+  const query = getQuery(event)
+  try {
+    const filterId = readOptionalText(query.filter)
+    if (filterId) {
+      const saved = await getSavedFilterForAccount(db, accountId, filterId)
+      if (!saved) {
+        throw new AccountActionError(404, '필터를 찾지 못했습니다.')
+      }
+      const filtered = await listMemosByFilter(db, {
+        accountId,
+        includeTagIds: saved.includeTags.map((tag) => tag.id),
+        excludeTagIds: saved.excludeTags.map((tag) => tag.id),
+        keyword: saved.keyword,
+      })
+      return {
+        memos: filtered.memos.map(toMemoItem),
+        applied: {
+          id: saved.id,
+          name: saved.name,
+          keyword: saved.keyword,
+          includeTags: saved.includeTags.map(toFilterTag),
+          excludeTags: saved.excludeTags.map(toFilterTag),
+        },
+      }
+    }
+    const includeTagIds = readTagQuery(query.include)
+    const excludeTagIds = readTagQuery(query.exclude)
+    const keyword = readKeywordQuery(query.keyword)
+    if (includeTagIds.length === 0 && excludeTagIds.length === 0 && keyword.length === 0) {
+      const memos = await listMemosForAccount(db, accountId)
+      return { memos: memos.map(toMemoItem), applied: null }
+    }
+    const filtered = await listMemosByFilter(db, {
+      accountId,
+      includeTagIds,
+      excludeTagIds,
+      keyword,
+    })
+    return {
+      memos: filtered.memos.map(toMemoItem),
+      applied: {
+        id: null,
+        name: null,
+        keyword,
+        includeTags: filtered.includeTags.map(toFilterTag),
+        excludeTags: filtered.excludeTags.map(toFilterTag),
+      },
+    }
+  } catch (error) {
+    throw mapFilterError(error)
+  }
 }
 
 export async function addEmptyMemo(event: H3Event): Promise<MemoItem> {
@@ -93,6 +146,55 @@ function toMemoItem(memo: MemoRecord): MemoItem {
     version: memo.version,
     updatedAt: memo.updatedAt,
   }
+}
+
+function readOptionalText(value: unknown): string {
+  if (value == null || value === '') {
+    return ''
+  }
+  if (typeof value === 'string') {
+    return value.trim()
+  }
+  if (Array.isArray(value) && value.length === 1 && typeof value[0] === 'string') {
+    return value[0].trim()
+  }
+  throw new AccountActionError(400, '조건 오류: 필터 조건이 올바르지 않습니다.')
+}
+
+function readTagQuery(value: unknown): string[] {
+  if (value == null || value === '') {
+    return []
+  }
+  const source = Array.isArray(value) ? value : [value]
+  const ids: string[] = []
+  for (const item of source) {
+    if (typeof item !== 'string') {
+      throw new AccountActionError(400, '조건 오류: 태그 조건이 올바르지 않습니다.')
+    }
+    for (const id of item.split(',')) {
+      const trimmed = id.trim()
+      if (trimmed) {
+        ids.push(trimmed)
+      }
+    }
+  }
+  return ids
+}
+
+function readKeywordQuery(value: unknown): string {
+  if (value == null || value === '') {
+    return ''
+  }
+  if (Array.isArray(value)) {
+    if (value.length > 1) {
+      throw new AccountActionError(400, '키워드는 하나여야 합니다.')
+    }
+    return readKeywordQuery(value[0])
+  }
+  if (typeof value !== 'string') {
+    throw new AccountActionError(400, '키워드는 하나여야 합니다.')
+  }
+  return value
 }
 
 async function requireAccount(event: H3Event): Promise<string> {
